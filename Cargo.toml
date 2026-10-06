@@ -17,7 +17,13 @@ description = "Lightweight provider and profile manager for AI coding agents."
 
 [workspace.dependencies]
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` is REQUIRED, not incidental. Without it `serde_json::Map` is a
+# BTreeMap, so every write to Claude Code's settings.json would reorder the
+# user's keys alphabetically — a diff they never asked for, produced by a tool
+# whose whole promise is that it edits their config losslessly. The feature
+# switches Map to an insertion-ordered IndexMap. Test:
+# config::json_patch::tests::key_order_is_preserved_across_a_mutation
+serde_json = { version = "1", features = ["preserve_order"] }
 thiserror = "2"
 anyhow = "1"
 uuid = { version = "1", features = ["v4", "serde"] }

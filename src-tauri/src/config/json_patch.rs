@@ -137,6 +137,11 @@ impl ClaudeJson {
     }
 
     /// Serialise with 2-space indentation, matching Claude Code's own style.
+    ///
+    /// The user's line ending and trailing-newline choice are reapplied, so a
+    /// file written on Windows keeps its CRLF endings and a file without a final
+    /// newline does not silently gain one. `serde_json` always emits `\n`, so the
+    /// conversion is done here rather than left to the caller.
     pub fn to_string_preserving(&self) -> String {
         let mut rendered = serde_json::to_string_pretty(&Value::Object(self.root.clone()))
             .unwrap_or_else(|_| {
@@ -144,8 +149,17 @@ impl ClaudeJson {
                 // fall back to compact output rather than panicking.
                 Value::Object(self.root.clone()).to_string()
             });
+
+        if self.newline == "\r\n" {
+            // Normalise first: a mixed file would otherwise become doubly
+            // converted (`\r\r\n`).
+            rendered = rendered.replace("\r\n", "\n").replace('\n', "\r\n");
+        }
+
         if self.had_trailing_newline && !rendered.ends_with('\n') {
-            rendered.push('\n');
+            // Append the file's own terminator, not a bare `\n`, so a CRLF file
+            // does not end up with one stray LF at the end.
+            rendered.push_str(&self.newline);
         }
         rendered
     }
@@ -194,6 +208,55 @@ mod tests {
             "existing env must survive: {out}"
         );
         assert!(out.contains("ANTHROPIC_BASE_URL"), "{out}");
+    }
+
+    #[test]
+    fn key_order_is_preserved_across_a_mutation() {
+        // Claude Code's settings file is hand-edited by users. Reordering their
+        // keys would produce a diff they did not ask for and make the file look
+        // rewritten, which is exactly what "lossless editing" must prevent.
+        //
+        // The keys below are deliberately in non-alphabetical order: `zebra`,
+        // `apple`, `middle`. A BTreeMap-backed Map (serde_json without the
+        // `preserve_order` feature) would emit them sorted and fail this test.
+        let input = r#"{
+  "zebra": 1,
+  "apple": 2,
+  "env": { "ZED": "1", "ALPHA": "2" },
+  "middle": 3
+}"#;
+        let mut doc = ClaudeJson::parse(input).unwrap();
+        doc.env_set("ANTHROPIC_BASE_URL", "https://x");
+
+        let out = doc.to_string_preserving();
+
+        let zebra = out.find("\"zebra\"").expect("zebra survives");
+        let apple = out.find("\"apple\"").expect("apple survives");
+        let middle = out.find("\"middle\"").expect("middle survives");
+        assert!(
+            zebra < apple && apple < middle,
+            "top-level key order changed: {out}"
+        );
+
+        let zed = out.find("\"ZED\"").expect("ZED survives");
+        let alpha = out.find("\"ALPHA\"").expect("ALPHA survives");
+        assert!(zed < alpha, "env key order changed: {out}");
+    }
+
+    #[test]
+    fn nested_objects_keep_their_order_too() {
+        // Order must hold at every depth, not just the root.
+        let input = r#"{"outer":{"zz":1,"aa":2,"mm":{"yy":1,"bb":2}}}"#;
+        let mut doc = ClaudeJson::parse(input).unwrap();
+        doc.env_set("NEW", "1");
+        let out = doc.to_string_preserving();
+
+        let zz = out.find("\"zz\"").unwrap();
+        let aa = out.find("\"aa\"").unwrap();
+        let yy = out.find("\"yy\"").unwrap();
+        let bb = out.find("\"bb\"").unwrap();
+        assert!(zz < aa, "outer object order changed: {out}");
+        assert!(yy < bb, "nested object order changed: {out}");
     }
 
     #[test]
@@ -254,6 +317,51 @@ mod tests {
     fn crlf_settings_are_detected() {
         let doc = ClaudeJson::parse("{\r\n  \"model\": \"x\"\r\n}\r\n").unwrap();
         assert_eq!(doc.newline(), "\r\n");
+    }
+
+    #[test]
+    fn crlf_is_actually_reapplied_on_write() {
+        // Regression: the line ending was detected and exposed via `newline()`
+        // but never used when serialising, so activating a profile rewrote a
+        // Windows user's CRLF settings file with LF endings. Detecting a property
+        // is worthless if the writer ignores it.
+        let mut doc = ClaudeJson::parse("{\r\n  \"model\": \"x\"\r\n}\r\n").unwrap();
+        doc.env_set("ANTHROPIC_BASE_URL", "https://gw.example.com");
+        let out = doc.to_string_preserving();
+
+        assert!(out.contains("\r\n"), "CRLF was lost: {out:?}");
+        assert!(
+            !out.replace("\r\n", "").contains('\n'),
+            "the file became mixed line endings: {out:?}"
+        );
+        // The terminator must be CRLF too, not a lone LF.
+        assert!(out.ends_with("\r\n"), "wrong final terminator: {out:?}");
+    }
+
+    #[test]
+    fn a_lf_file_stays_lf() {
+        // The conversion must not be applied in the other direction.
+        let mut doc = ClaudeJson::parse("{\n  \"model\": \"x\"\n}\n").unwrap();
+        doc.env_set("ANTHROPIC_BASE_URL", "https://gw.example.com");
+        let out = doc.to_string_preserving();
+        assert!(!out.contains('\r'), "LF became CRLF: {out:?}");
+    }
+
+    #[test]
+    fn crlf_round_trips_idempotently() {
+        // Writing twice must not accumulate carriage returns.
+        let mut doc = ClaudeJson::parse("{\r\n  \"model\": \"x\"\r\n}\r\n").unwrap();
+        doc.env_set("A", "1");
+        let once = doc.to_string_preserving();
+        let again = ClaudeJson::parse(&once).unwrap().to_string_preserving();
+        assert_eq!(once, again, "CRLF handling is not idempotent");
+        assert!(!once.contains("\r\r"), "carriage returns accumulated");
+    }
+
+    #[test]
+    fn a_trailing_newline_is_not_added_when_absent() {
+        let doc = ClaudeJson::parse("{\"model\":\"x\"}").unwrap();
+        assert!(!doc.to_string_preserving().ends_with('\n'));
     }
 
     #[test]

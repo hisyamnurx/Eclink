@@ -742,6 +742,90 @@ mod tests {
     }
 
     #[test]
+    fn activation_preserves_the_users_key_order_and_surrounding_layout() {
+        // The strongest form of the "lossless" promise: after Bridge writes its
+        // two variables, every line the user wrote is still present, still in the
+        // same order. A structural rewrite (or a Map backed by a BTreeMap) would
+        // reorder these keys and fail here.
+        let user_file = "{\n  \"statusLine\": { \"type\": \"command\", \"command\": \"git status\" },\n  \"permissions\": { \"allow\": [\"Bash(git status)\"] },\n  \"zzCustom\": true,\n  \"env\": { \"ZZ_FLAG\": \"1\", \"AA_FLAG\": \"2\" },\n  \"hooks\": { \"PreToolUse\": [] }\n}\n";
+
+        let mut doc = ClaudeJson::parse(user_file).unwrap();
+        doc.env_set(BASE_URL_VAR, "https://gw.example.com");
+        doc.env_set(AUTH_TOKEN_VAR, "gw-token");
+        let out = doc.to_string_preserving();
+
+        // Every user key survives, in its original relative order.
+        let order = [
+            "\"statusLine\"",
+            "\"permissions\"",
+            "\"zzCustom\"",
+            "\"env\"",
+            "\"hooks\"",
+        ];
+        let mut last = 0usize;
+        for key in order {
+            let at = out.find(key).unwrap_or_else(|| panic!("lost {key}: {out}"));
+            assert!(at >= last, "key order changed for {key}: {out}");
+            last = at;
+        }
+
+        // The user's own env entries keep their order too, and the Bridge
+        // variables are added without disturbing them.
+        let zz = out.find("\"ZZ_FLAG\"").expect("ZZ_FLAG survives");
+        let aa = out.find("\"AA_FLAG\"").expect("AA_FLAG survives");
+        assert!(zz < aa, "env key order changed: {out}");
+
+        // The user's formatting choices survive: two-space indent, one key per
+        // line, and a trailing newline.
+        assert!(out.contains("\n  \"permissions\""), "indent changed: {out}");
+        assert!(out.ends_with('\n'), "trailing newline was dropped");
+    }
+
+    #[test]
+    fn activation_does_not_reorder_a_deeply_nested_untouched_subtree() {
+        // Nesting must not be flattened or rebuilt either.
+        let user_file = r#"{
+  "permissions": {
+    "allow": ["Zed", "Alpha", "Middle"],
+    "deny": []
+  }
+}"#;
+        let mut doc = ClaudeJson::parse(user_file).unwrap();
+        doc.env_set(BASE_URL_VAR, "https://gw.example.com");
+        let out = doc.to_string_preserving();
+
+        // Array order is user data and must never be sorted.
+        let zed = out.find("Zed").expect("Zed survives");
+        let alpha = out.find("Alpha").expect("Alpha survives");
+        let middle = out.find("Middle").expect("Middle survives");
+        assert!(zed < alpha && alpha < middle, "array order changed: {out}");
+        assert!(out.contains("\"deny\""), "deny survives: {out}");
+    }
+
+    #[test]
+    fn a_file_without_a_trailing_newline_keeps_it_that_way() {
+        // Round-tripping must not add bytes the user did not have.
+        let mut doc = ClaudeJson::parse(r#"{"env":{}}"#).unwrap();
+        doc.env_set(BASE_URL_VAR, "https://gw.example.com");
+        let out = doc.to_string_preserving();
+        assert!(!out.ends_with('\n'), "a newline was added: {out:?}");
+    }
+
+    #[test]
+    fn crlf_line_endings_survive_an_activation() {
+        // A user on a CRLF file must not get an LF rewrite.
+        let user_file = "{\r\n  \"env\": {},\r\n  \"zz\": 1\r\n}\r\n";
+        let mut doc = ClaudeJson::parse(user_file).unwrap();
+        doc.env_set(BASE_URL_VAR, "https://gw.example.com");
+        let out = doc.to_string_preserving();
+        assert!(out.contains("\r\n"), "CRLF was not preserved: {out:?}");
+        assert!(
+            !out.replace("\r\n", "").contains('\n'),
+            "the file became mixed line endings: {out:?}"
+        );
+    }
+
+    #[test]
     fn restore_removes_only_bridge_env_entries() {
         let text = r#"{
   "env": {
