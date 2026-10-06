@@ -7,6 +7,7 @@
 
 use std::time::{Duration, Instant};
 
+use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::error::{BridgeError, BridgeResult};
@@ -24,7 +25,8 @@ pub const STREAM_TIMEOUT: Duration = Duration::from_secs(45);
 pub const MAX_BODY_BYTES: usize = 256 * 1024;
 
 /// How a probe ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ProbeOutcome {
     /// The endpoint behaved as the agent protocol requires.
     Supported,
@@ -665,6 +667,241 @@ pub async fn probe_codex_protocol(target: &ProbeTarget) -> ProbeResult {
     }
 }
 
+/// The API protocols a provider may offer, probed independently of each other.
+///
+/// A gateway commonly serves one of these and not another: a Chat Completions
+/// proxy answers `/v1/chat/completions` and returns 404 for `/v1/messages`, while
+/// an Anthropic-compatible gateway does the opposite. Treating "the endpoint
+/// works" as a single fact is what caused a provider to look incompatible when it
+/// was merely a different shape.
+///
+/// Each capability is determined by its own request, so a provider that supports
+/// two of the three reports exactly that. Nothing here translates between
+/// protocols: a capability is either served by the provider or it is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Protocol {
+    /// `/v1/responses` — required by Codex.
+    OpenAiResponses,
+    /// `/v1/chat/completions` — widely supported, not used by either agent.
+    OpenAiChatCompletions,
+    /// `/v1/messages` — required by Claude Code.
+    AnthropicMessages,
+}
+
+impl Protocol {
+    pub const ALL: [Protocol; 3] = [
+        Protocol::OpenAiResponses,
+        Protocol::OpenAiChatCompletions,
+        Protocol::AnthropicMessages,
+    ];
+
+    /// Stable identifier for the UI and for persisted records.
+    pub fn code(self) -> &'static str {
+        match self {
+            Protocol::OpenAiResponses => "openai_responses",
+            Protocol::OpenAiChatCompletions => "openai_chat_completions",
+            Protocol::AnthropicMessages => "anthropic_messages",
+        }
+    }
+
+    /// What the user reads.
+    pub fn label(self) -> &'static str {
+        match self {
+            Protocol::OpenAiResponses => "OpenAI Responses",
+            Protocol::OpenAiChatCompletions => "OpenAI Chat Completions",
+            Protocol::AnthropicMessages => "Anthropic Messages",
+        }
+    }
+
+    /// The route this protocol is served on, as shown to the user.
+    ///
+    /// For Responses this is the *effective* route a `/v1`-based provider is
+    /// reached at, which is the common configuration and what Codex's own default
+    /// base URL produces. The probe itself asks for the bare `/responses` path,
+    /// which is what Codex's source does — it calls `url_for_path("/responses")`
+    /// against a base URL that already ends in `/v1`. The two agree because
+    /// [`ProbeTarget::url`] does not duplicate a version segment the base already
+    /// has.
+    pub fn route(self) -> &'static str {
+        match self {
+            Protocol::OpenAiResponses => "/v1/responses",
+            Protocol::OpenAiChatCompletions => "/v1/chat/completions",
+            Protocol::AnthropicMessages => "/v1/messages",
+        }
+    }
+
+    /// The path the probe sends, before it is joined onto a base URL.
+    ///
+    /// Distinct from [`Self::route`] only for Responses, and the distinction is
+    /// real: Codex asks for `/responses` and relies on its base URL to supply
+    /// `/v1`.
+    pub fn probe_path(self) -> &'static str {
+        match self {
+            Protocol::OpenAiResponses => "/responses",
+            Protocol::OpenAiChatCompletions => "/v1/chat/completions",
+            Protocol::AnthropicMessages => "/v1/messages",
+        }
+    }
+
+    /// The agent that requires this protocol, if any.
+    ///
+    /// Chat Completions is deliberately `None`: neither Codex nor Claude Code
+    /// speaks it, so a provider that offers only Chat Completions cannot serve
+    /// either agent and must not be reported as compatible with them.
+    pub fn required_by(self) -> Option<crate::profiles::AgentId> {
+        match self {
+            Protocol::OpenAiResponses => Some(crate::profiles::AgentId::Codex),
+            Protocol::AnthropicMessages => Some(crate::profiles::AgentId::Claude),
+            Protocol::OpenAiChatCompletions => None,
+        }
+    }
+}
+
+/// One protocol's support status.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolSupport {
+    pub protocol: Protocol,
+    pub code: String,
+    pub label: String,
+    pub route: String,
+    pub outcome: ProbeOutcome,
+    pub supported: bool,
+    pub latency_ms: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
+/// The result of probing every protocol a provider might offer.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProtocolCapabilities {
+    pub results: Vec<ProtocolSupport>,
+    /// Whether more than one protocol is supported, which is worth telling the
+    /// user because it means a model can be shared between agents.
+    pub multiple: bool,
+}
+
+impl ProtocolCapabilities {
+    /// Whether `protocol` was confirmed supported.
+    pub fn supports(&self, protocol: Protocol) -> bool {
+        self.results
+            .iter()
+            .any(|r| r.protocol == protocol && r.supported)
+    }
+
+    /// The supported protocols, in the order they were probed.
+    pub fn supported(&self) -> Vec<Protocol> {
+        self.results
+            .iter()
+            .filter(|r| r.supported)
+            .map(|r| r.protocol)
+            .collect()
+    }
+
+    /// Whether this provider can serve `agent`.
+    ///
+    /// Derived from the required protocol alone, so a Chat-Completions-only
+    /// provider is never reported as usable by either agent.
+    pub fn serves(&self, agent: crate::profiles::AgentId) -> bool {
+        Protocol::ALL
+            .iter()
+            .filter(|p| p.required_by() == Some(agent))
+            .any(|p| self.supports(*p))
+    }
+
+    /// A sentence naming what the provider offers, for the UI.
+    pub fn summary(&self) -> String {
+        let supported: Vec<&str> = self
+            .results
+            .iter()
+            .filter(|r| r.supported)
+            .map(|r| r.label.as_str())
+            .collect();
+        match supported.len() {
+            0 => "This endpoint did not answer on any known API route.".to_string(),
+            1 => format!("This endpoint serves {}.", supported[0]),
+            _ => format!("This endpoint serves {}.", supported.join(" and ")),
+        }
+    }
+}
+
+/// Probe every protocol independently and report which ones the provider serves.
+///
+/// All three probes run even when an earlier one succeeds, because the point is a
+/// capability matrix rather than a single verdict. Each probe sends a minimal,
+/// cheap request; a provider that answers 404 to a route is recorded as not
+/// supporting it, which is information rather than an error.
+pub async fn probe_protocols(target: &ProbeTarget) -> ProtocolCapabilities {
+    let mut results = Vec::new();
+
+    for protocol in Protocol::ALL {
+        let probe = match protocol {
+            Protocol::OpenAiResponses => probe_codex_protocol(target).await,
+            Protocol::OpenAiChatCompletions => probe_chat_completions(target).await,
+            Protocol::AnthropicMessages => probe_claude_protocol(target).await,
+        };
+        results.push(ProtocolSupport {
+            protocol,
+            code: protocol.code().to_string(),
+            label: protocol.label().to_string(),
+            route: protocol.route().to_string(),
+            outcome: probe.outcome,
+            supported: probe.outcome == ProbeOutcome::Supported,
+            latency_ms: probe.latency_ms,
+            detail: probe.detail,
+        });
+    }
+
+    let multiple = results.iter().filter(|r| r.supported).count() > 1;
+    ProtocolCapabilities { results, multiple }
+}
+
+/// Does the endpoint speak the OpenAI Chat Completions API?
+///
+/// Neither agent uses this protocol, but probing it distinguishes "the gateway is
+/// broken" from "the gateway is a Chat Completions proxy", which is the
+/// difference between an actionable message and a misleading one.
+pub async fn probe_chat_completions(target: &ProbeTarget) -> ProbeResult {
+    let body = json!({
+        "model": target.model,
+        "max_tokens": 16,
+        "messages": [{ "role": "user", "content": "ping" }]
+    });
+    let request = match target.post("/v1/chat/completions", body) {
+        Ok(request) => request,
+        Err(err) => {
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
+        }
+    };
+
+    match execute(request).await {
+        Ok((status, body, latency)) => {
+            if !status.is_success() {
+                return ProbeResult::new(classify_status(status, &body), latency)
+                    .with_detail(format!("{} {}", status.as_u16(), error_detail(&body)));
+            }
+            match serde_json::from_str::<serde_json::Value>(&body) {
+                Ok(value) => {
+                    // A Chat Completions payload carries `choices`; requiring it
+                    // prevents a generic JSON 200 from being mistaken for support.
+                    if value.get("choices").is_some() {
+                        ProbeResult::new(ProbeOutcome::Supported, latency)
+                    } else {
+                        ProbeResult::new(ProbeOutcome::Unsupported, latency).with_detail(
+                            "The endpoint answered but not with a Chat Completions payload.",
+                        )
+                    }
+                }
+                Err(_) => ProbeResult::new(ProbeOutcome::Unsupported, latency)
+                    .with_detail("The endpoint answered with something that is not JSON."),
+            }
+        }
+        Err(result) => result,
+    }
+}
+
 /// Step 5 (Claude): does the endpoint speak the Anthropic Messages API?
 pub async fn probe_claude_protocol(target: &ProbeTarget) -> ProbeResult {
     let body = json!({
@@ -1248,6 +1485,196 @@ mod tests {
         assert_ne!(
             ProbeOutcome::Unsupported.message(),
             ProbeOutcome::UnknownModel.message()
+        );
+    }
+
+    #[test]
+    fn every_protocol_has_a_distinct_code_label_and_route() {
+        let codes: Vec<&str> = Protocol::ALL.iter().map(|p| p.code()).collect();
+        let labels: Vec<&str> = Protocol::ALL.iter().map(|p| p.label()).collect();
+        let routes: Vec<&str> = Protocol::ALL.iter().map(|p| p.route()).collect();
+
+        // Duplicates would make the capability list ambiguous in the UI and in
+        // anything persisted from it.
+        for list in [&codes, &labels, &routes] {
+            let mut sorted = list.clone();
+            sorted.sort_unstable();
+            sorted.dedup();
+            assert_eq!(sorted.len(), list.len(), "duplicate entry in {list:?}");
+        }
+        assert_eq!(codes.len(), 3);
+    }
+
+    #[test]
+    fn the_required_protocol_matches_each_agent() {
+        // Codex needs Responses, Claude Code needs Messages, and Chat
+        // Completions serves neither. That last one is the important assertion:
+        // a Chat-only gateway must never be reported as usable by an agent.
+        assert_eq!(
+            Protocol::OpenAiResponses.required_by(),
+            Some(crate::profiles::AgentId::Codex)
+        );
+        assert_eq!(
+            Protocol::AnthropicMessages.required_by(),
+            Some(crate::profiles::AgentId::Claude)
+        );
+        assert_eq!(Protocol::OpenAiChatCompletions.required_by(), None);
+    }
+
+    /// Build a capability report with the given protocols marked supported.
+    fn capabilities(supported: &[Protocol]) -> ProtocolCapabilities {
+        let results = Protocol::ALL
+            .iter()
+            .map(|p| ProtocolSupport {
+                protocol: *p,
+                code: p.code().to_string(),
+                label: p.label().to_string(),
+                route: p.route().to_string(),
+                outcome: if supported.contains(p) {
+                    ProbeOutcome::Supported
+                } else {
+                    ProbeOutcome::Unsupported
+                },
+                supported: supported.contains(p),
+                latency_ms: 1,
+                detail: None,
+            })
+            .collect();
+        ProtocolCapabilities {
+            multiple: supported.len() > 1,
+            results,
+        }
+    }
+
+    #[test]
+    fn responses_only_serves_codex_and_not_claude() {
+        let caps = capabilities(&[Protocol::OpenAiResponses]);
+        assert!(caps.serves(crate::profiles::AgentId::Codex));
+        assert!(!caps.serves(crate::profiles::AgentId::Claude));
+        assert!(!caps.multiple);
+    }
+
+    #[test]
+    fn anthropic_only_serves_claude_and_not_codex() {
+        let caps = capabilities(&[Protocol::AnthropicMessages]);
+        assert!(caps.serves(crate::profiles::AgentId::Claude));
+        assert!(!caps.serves(crate::profiles::AgentId::Codex));
+    }
+
+    #[test]
+    fn both_protocols_serve_both_agents() {
+        let caps = capabilities(&[Protocol::OpenAiResponses, Protocol::AnthropicMessages]);
+        assert!(caps.serves(crate::profiles::AgentId::Codex));
+        assert!(caps.serves(crate::profiles::AgentId::Claude));
+        assert!(caps.multiple, "two protocols is worth reporting");
+    }
+
+    #[test]
+    fn chat_completions_only_serves_neither_agent() {
+        // The case the task calls out: do not falsely claim support.
+        let caps = capabilities(&[Protocol::OpenAiChatCompletions]);
+        assert!(
+            !caps.serves(crate::profiles::AgentId::Codex),
+            "Chat Completions is not Codex's protocol"
+        );
+        assert!(
+            !caps.serves(crate::profiles::AgentId::Claude),
+            "Chat Completions is not Claude Code's protocol"
+        );
+        assert!(!caps.multiple);
+    }
+
+    #[test]
+    fn chat_completions_alongside_a_required_protocol_still_serves_it() {
+        // A gateway that offers both Chat and Messages does serve Claude Code,
+        // and the extra capability must not mask that.
+        let caps = capabilities(&[Protocol::OpenAiChatCompletions, Protocol::AnthropicMessages]);
+        assert!(caps.serves(crate::profiles::AgentId::Claude));
+        assert!(!caps.serves(crate::profiles::AgentId::Codex));
+    }
+
+    #[test]
+    fn no_protocol_supported_serves_nothing() {
+        let caps = capabilities(&[]);
+        assert!(!caps.serves(crate::profiles::AgentId::Codex));
+        assert!(!caps.serves(crate::profiles::AgentId::Claude));
+        assert!(caps.supported().is_empty());
+        assert!(caps.summary().contains("did not answer"));
+    }
+
+    #[test]
+    fn all_three_protocols_report_all_three() {
+        let caps = capabilities(&Protocol::ALL);
+        assert_eq!(caps.supported().len(), 3);
+        assert!(caps.serves(crate::profiles::AgentId::Codex));
+        assert!(caps.serves(crate::profiles::AgentId::Claude));
+        assert!(caps.multiple);
+    }
+
+    #[test]
+    fn the_summary_names_what_is_supported() {
+        let one = capabilities(&[Protocol::AnthropicMessages]);
+        assert!(one.summary().contains("Anthropic Messages"));
+
+        let two = capabilities(&[Protocol::OpenAiResponses, Protocol::AnthropicMessages]);
+        let summary = two.summary();
+        assert!(summary.contains("OpenAI Responses"));
+        assert!(summary.contains("Anthropic Messages"));
+        assert!(summary.contains(" and "), "{summary}");
+    }
+
+    #[test]
+    fn every_protocol_route_is_the_documented_one() {
+        assert_eq!(Protocol::OpenAiResponses.route(), "/v1/responses");
+        assert_eq!(
+            Protocol::OpenAiChatCompletions.route(),
+            "/v1/chat/completions"
+        );
+        assert_eq!(Protocol::AnthropicMessages.route(), "/v1/messages");
+    }
+
+    #[test]
+    fn the_responses_probe_path_matches_what_codex_itself_requests() {
+        // Verified against Codex's source: it calls
+        // `url_for_path("/responses")`, and its default base URL is
+        // `https://api.openai.com/v1`. Probing `/v1/responses` instead would
+        // still work for a `/v1`-based provider but would 404 for a provider
+        // configured with the bare host, which is what the probe must support.
+        assert_eq!(Protocol::OpenAiResponses.probe_path(), "/responses");
+        // The other two are absolute, matching their providers' documented
+        // routes, because neither agent supplies a version prefix for them.
+        assert_eq!(
+            Protocol::OpenAiChatCompletions.probe_path(),
+            "/v1/chat/completions"
+        );
+        assert_eq!(Protocol::AnthropicMessages.probe_path(), "/v1/messages");
+    }
+
+    #[test]
+    fn a_probe_path_joined_onto_a_v1_base_lands_on_the_documented_route() {
+        // The two representations must agree for the configuration the user
+        // actually has, which is a base URL ending in /v1.
+        for protocol in Protocol::ALL {
+            let base = target_for("https://gateway.example.com/v1");
+            assert_eq!(
+                base.url(protocol.probe_path()),
+                format!("https://gateway.example.com{}", protocol.route()),
+                "{:?}",
+                protocol
+            );
+        }
+    }
+
+    #[test]
+    fn the_admin_fixture_values_are_reproduced_in_the_capability_codes() {
+        // The user's two real providers: one Anthropic-compatible, one that
+        // serves the OpenAI shape. The codes are what the UI persists and shows,
+        // so pin them against the names the user saw.
+        assert_eq!(Protocol::AnthropicMessages.code(), "anthropic_messages");
+        assert_eq!(Protocol::OpenAiResponses.code(), "openai_responses");
+        assert_eq!(
+            Protocol::OpenAiChatCompletions.code(),
+            "openai_chat_completions"
         );
     }
 

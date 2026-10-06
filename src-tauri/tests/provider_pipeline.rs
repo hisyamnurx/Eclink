@@ -771,3 +771,223 @@ async fn a_very_large_error_body_is_truncated_rather_than_held_in_memory() {
         detail.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// Protocol capabilities, probed independently.
+//
+// These are the tests that distinguish a provider which speaks one API shape
+// from one that speaks another. The user's two real providers are the models
+// here: one answers Anthropic Messages, the other only the OpenAI shape.
+// ---------------------------------------------------------------------------
+
+use eclyzer_bridge_lib::profiles::AgentId;
+use eclyzer_bridge_lib::testing::probes::{probe_protocols, Protocol};
+
+/// A server that answers one route and 404s the rest.
+///
+/// The paths here mirror what each probe actually sends, which was verified
+/// against Codex's own source rather than assumed:
+///
+/// * Codex builds its request from `url_for_path("/responses")`, and its default
+///   base URL is `https://api.openai.com/v1` — so a provider configured with a
+///   `/v1` base is reached at `/v1/responses`, and a bare host at `/responses`.
+/// * `wire_api = "chat"` is no longer supported by Codex at all; its source
+///   rejects the value with an explicit error. Chat Completions is therefore
+///   probed only to tell a Chat-only gateway apart from a broken one, never as a
+///   way to serve Codex.
+fn single_protocol_server(route: &str, body: &str) -> MockServer {
+    let routes = [
+        ("/responses", OK_RESPONSES),
+        ("/v1/chat/completions", OK_CHAT),
+        ("/v1/messages", OK_MESSAGES),
+    ]
+    .into_iter()
+    .map(|(path, payload)| {
+        let response = if path == route {
+            Response::json(200, body)
+        } else {
+            let _ = payload;
+            // A 404 with a realistic body, matching what the user saw from their
+            // gateway: "Route POST /v1/messages not found".
+            Response::json(
+                404,
+                &format!(r#"{{"error":"Route POST {path} not found"}}"#),
+            )
+        };
+        (path.to_string(), response)
+    })
+    .collect();
+    MockServer::start(routes)
+}
+
+#[tokio::test]
+async fn an_anthropic_only_gateway_reports_only_anthropic_messages() {
+    // The `provider_a` shape: works for Claude Code, and the OpenAI routes 404.
+    let server = single_protocol_server("/v1/messages", OK_MESSAGES);
+    let caps = probe_protocols(&target(&server, AuthMode::XApiKey)).await;
+
+    assert!(caps.supports(Protocol::AnthropicMessages));
+    assert!(!caps.supports(Protocol::OpenAiResponses));
+    assert!(!caps.supports(Protocol::OpenAiChatCompletions));
+    assert!(caps.serves(AgentId::Claude));
+    assert!(
+        !caps.serves(AgentId::Codex),
+        "an Anthropic-only endpoint must not be claimed for Codex"
+    );
+}
+
+#[tokio::test]
+async fn a_responses_only_gateway_reports_only_openai_responses() {
+    // Note the path: Codex builds its request from `url_for_path("/responses")`
+    // and its default base URL already ends in `/v1`, so the route here is the
+    // bare `/responses` that the probe actually sends to a host without a path.
+    let server = MockServer::start(vec![
+        ("/responses".into(), Response::json(200, OK_RESPONSES)),
+        (
+            "/v1/chat/completions".into(),
+            Response::json(404, r#"{"error":"not found"}"#),
+        ),
+        (
+            "/v1/messages".into(),
+            Response::json(404, r#"{"error":"not found"}"#),
+        ),
+    ]);
+    let caps = probe_protocols(&target(&server, AuthMode::Bearer)).await;
+
+    assert!(caps.supports(Protocol::OpenAiResponses));
+    assert!(!caps.supports(Protocol::AnthropicMessages));
+    assert!(caps.serves(AgentId::Codex));
+    assert!(!caps.serves(AgentId::Claude));
+}
+
+#[tokio::test]
+async fn a_chat_completions_only_gateway_serves_neither_agent() {
+    // The case the task is explicit about: a Chat-Completions proxy must not be
+    // reported as compatible with Codex or Claude Code, because neither agent
+    // speaks that protocol and Bridge has no translation layer.
+    let server = single_protocol_server("/v1/chat/completions", OK_CHAT);
+    let caps = probe_protocols(&target(&server, AuthMode::Bearer)).await;
+
+    assert!(caps.supports(Protocol::OpenAiChatCompletions));
+    assert!(!caps.serves(AgentId::Codex));
+    assert!(!caps.serves(AgentId::Claude));
+    assert_eq!(caps.supported(), vec![Protocol::OpenAiChatCompletions]);
+}
+
+#[tokio::test]
+async fn a_gateway_serving_two_protocols_reports_both() {
+    let server = MockServer::start(vec![
+        ("/responses".into(), Response::json(200, OK_RESPONSES)),
+        ("/v1/messages".into(), Response::json(200, OK_MESSAGES)),
+        (
+            "/v1/chat/completions".into(),
+            Response::json(404, r#"{"error":"not found"}"#),
+        ),
+    ]);
+    let caps = probe_protocols(&target(&server, AuthMode::Bearer)).await;
+
+    assert!(caps.supports(Protocol::OpenAiResponses));
+    assert!(caps.supports(Protocol::AnthropicMessages));
+    assert!(!caps.supports(Protocol::OpenAiChatCompletions));
+    assert!(caps.multiple, "two protocols must be reported as multiple");
+    assert!(caps.serves(AgentId::Codex));
+    assert!(caps.serves(AgentId::Claude));
+}
+
+#[tokio::test]
+async fn every_protocol_is_probed_even_when_the_first_one_fails() {
+    // A capability matrix requires trying all three. Stopping at the first
+    // failure would report a gateway as unsupported when it serves a different
+    // API perfectly well.
+    let server = single_protocol_server("/v1/messages", OK_MESSAGES);
+    let _ = probe_protocols(&target(&server, AuthMode::XApiKey)).await;
+
+    let routes: Vec<String> = server.requests().iter().map(|r| r.path.clone()).collect();
+    for route in ["/responses", "/v1/chat/completions", "/v1/messages"] {
+        assert!(
+            routes.iter().any(|r| r == route),
+            "{route} was never probed; saw {routes:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_route_not_found_is_recorded_as_unsupported_not_as_an_auth_failure() {
+    // A provider that does not serve a route has not rejected the credential.
+    let server = single_protocol_server("/v1/messages", OK_MESSAGES);
+    let caps = probe_protocols(&target(&server, AuthMode::XApiKey)).await;
+
+    let responses = caps
+        .results
+        .iter()
+        .find(|r| r.protocol == Protocol::OpenAiResponses)
+        .expect("the Responses protocol is always probed");
+
+    assert_eq!(responses.outcome, ProbeOutcome::Unsupported);
+    assert_ne!(responses.outcome, ProbeOutcome::Unauthorized);
+    assert_eq!(responses.route, "/v1/responses");
+}
+
+#[tokio::test]
+async fn a_one_hundred_percent_unreachable_endpoint_reports_nothing_supported() {
+    // Nothing listens on this port, so every capability must be Unreachable
+    // rather than being optimistically reported.
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind an ephemeral port");
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let target = ProbeTarget::new(
+        &format!("http://127.0.0.1:{port}"),
+        "test-model",
+        Secret::new("sk-test"),
+        AuthMode::Bearer,
+        Some(10_000),
+    )
+    .expect("target");
+
+    let caps = probe_protocols(&target).await;
+    assert!(caps.supported().is_empty());
+    assert!(!caps.serves(AgentId::Codex));
+    assert!(!caps.serves(AgentId::Claude));
+    assert!(caps.summary().contains("did not answer"));
+}
+
+#[tokio::test]
+async fn protocol_probing_does_not_leak_the_key_into_the_capability_report() {
+    // The report is shown in the UI and can be copied into a diagnostics bundle.
+    let server = single_protocol_server("/v1/messages", OK_MESSAGES);
+    let caps = probe_protocols(&target(&server, AuthMode::XApiKey)).await;
+
+    let serialised = serde_json::to_string(&caps).expect("the report serialises");
+    assert!(!serialised.contains("sk-test-key"), "{serialised}");
+    assert!(!serialised.contains("Authorization"), "{serialised}");
+}
+
+#[tokio::test]
+async fn a_gateway_serving_v1_in_its_base_url_is_probed_at_the_right_route() {
+    // The /v1/v1 defect, exercised end to end. The mock server matches on the
+    // path it receives, so a duplicated segment would 404 every route and this
+    // test would report no capabilities at all.
+    let server = single_protocol_server("/v1/messages", OK_MESSAGES);
+    let base = format!("{}/v1", server.base_url);
+    let target = ProbeTarget::new(
+        &base,
+        "test-model",
+        Secret::new("sk-test"),
+        AuthMode::XApiKey,
+        Some(10_000),
+    )
+    .expect("target");
+
+    let caps = probe_protocols(&target).await;
+    assert!(
+        caps.supports(Protocol::AnthropicMessages),
+        "a base URL ending in /v1 must not produce /v1/v1"
+    );
+
+    let paths: Vec<String> = server.requests().iter().map(|r| r.path.clone()).collect();
+    assert!(
+        !paths.iter().any(|p| p.contains("/v1/v1/")),
+        "a duplicated version segment was sent: {paths:?}"
+    );
+}
