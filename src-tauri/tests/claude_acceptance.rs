@@ -9,9 +9,19 @@
 //! check can be run deliberately:
 //!
 //! ```text
-//! $env:ECLYZER_VERIFY_DIR = "$env:TEMP\claude-verify"
+//! # Start from the backup the fix was validated against, so the test always
+//! # sees the input that produced the bug rather than the already-fixed file.
+//! $dir = "$env:TEMP\claude-verify"
+//! New-Item -ItemType Directory -Force $dir | Out-Null
+//! Copy-Item "$env:USERPROFILE\.claude\settings.json.before-bridge.bak" `
+//!           "$dir\settings.json" -Force
+//! $env:ECLYZER_VERIFY_DIR = $dir
 //! cargo test --test claude_acceptance -- --ignored --nocapture
 //! ```
+//!
+//! The backup lives in the user's own Claude directory rather than in the
+//! repository: it is their personal configuration, and a public repository is not
+//! the place for it even though it happens to contain no credential.
 //!
 //! The directory must already contain a `settings.json` to operate on, and the
 //! test refuses to run against a path that looks like a real `~/.claude`.

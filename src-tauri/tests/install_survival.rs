@@ -176,3 +176,56 @@ fn no_managed_artifact_is_written_outside_the_data_directory() {
 fn is_inside(path: &Path, root: &Path) -> bool {
     path.starts_with(root)
 }
+
+// ---------------------------------------------------------------------------
+// What ends up inside the installer.
+//
+// This is here because a real mistake happened: a one-shot maintenance binary was
+// added under `src/bin/`, and Tauri bundles every binary cargo produces. It
+// shipped inside the installer without appearing anywhere in
+// `bundle.resources`, so reading the configuration did not reveal it — only
+// listing the installed directory did.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn only_the_expected_binaries_live_in_the_crate_binary_directory() {
+    // Tauri bundles whatever `src/bin/*.rs` produces. Anything placed there is
+    // shipped to users, so the directory must stay empty unless a binary is
+    // genuinely part of the application.
+    let bin_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("src")
+        .join("bin");
+    if !bin_dir.exists() {
+        return;
+    }
+    let stray: Vec<String> = std::fs::read_dir(&bin_dir)
+        .expect("read src/bin")
+        .flatten()
+        .map(|entry| entry.file_name().to_string_lossy().to_string())
+        .collect();
+    assert!(
+        stray.is_empty(),
+        "src/bin/ contains {stray:?}; Tauri bundles these into the installer. \
+         Put maintenance tools in examples/ instead."
+    );
+}
+
+#[test]
+fn maintenance_tools_live_in_examples_not_in_the_bundled_binaries() {
+    // The tool must still exist and still be buildable, just not shipped.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    assert!(
+        root.join("examples")
+            .join("fix-claude-settings.rs")
+            .exists(),
+        "the maintenance tool was deleted rather than relocated"
+    );
+    assert!(
+        !root
+            .join("src")
+            .join("bin")
+            .join("fix-claude-settings.rs")
+            .exists(),
+        "the maintenance tool is back in the bundled binary directory"
+    );
+}

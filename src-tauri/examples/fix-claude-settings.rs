@@ -9,10 +9,16 @@
 //! It uses the real adapter and the real safety sequence, so the change goes
 //! through the same read → validate → snapshot → patch → verify path the UI uses.
 //!
+//! It lives in `examples/` rather than `src/bin/` deliberately. Tauri bundles
+//! every binary cargo produces, so a tool placed in `src/bin/` is shipped inside
+//! the installer — which happened, and was caught by checking the installed
+//! directory rather than by reading the config, since `bundle.resources` does not
+//! describe it. `examples/` is built only when asked for and is never bundled.
+//!
 //! Run with the target directory as the only argument:
 //!
 //! ```text
-//! cargo run --bin fix-claude-settings -- "$env:USERPROFILE\.claude"
+//! cargo run --example fix-claude-settings -- "$env:USERPROFILE\.claude"
 //! ```
 
 use std::path::PathBuf;
