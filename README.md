@@ -195,7 +195,8 @@ Worth stating plainly, because the boundaries are deliberate:
 ## Contributing
 
 Issues and pull requests are welcome. Please read
-[CONTRIBUTING.md](CONTRIBUTING.md) first.
+[CONTRIBUTING.md](CONTRIBUTING.md) first, and note that this project follows the
+[Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md).
 
 Two rules matter more than any style preference:
 
