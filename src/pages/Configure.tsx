@@ -45,6 +45,33 @@ export function Configure({ initialAgent }: ConfigureProps) {
   const { agents, profiles, loading, loadError, reloadProfiles, notify } = useApp();
   const [templates, setTemplates] = useState<ProviderTemplate[]>([]);
   const [editing, setEditing] = useState<ProfileSummary | "new" | null>(null);
+  const duplicate = useAction();
+
+  /**
+   * Copy a profile, including its stored API key.
+   *
+   * The key itself never passes through this code: the backend copies the stored
+   * secret from the source profile to the new one, so a duplicate does not
+   * require the user to re-enter a credential they cannot see. Sending the
+   * plaintext up to the UI and back down would be the easy implementation and
+   * the wrong one.
+   */
+  const duplicateProfile = (profile: ProfileSummary) =>
+    void duplicate.run(
+      async () => {
+        const result = await call("duplicate_profile", { id: profile.id });
+        await reloadProfiles();
+        notify(
+          "success",
+          `Copied ${profile.name}.`,
+          result.hasSecret
+            ? "The API key was copied to the new provider."
+            : "This provider had no stored key to copy.",
+        );
+        return result;
+      },
+      { onError: () => false },
+    );
 
   useEffect(() => {
     let cancelled = false;
@@ -122,6 +149,7 @@ export function Configure({ initialAgent }: ConfigureProps) {
         agentSummary={agentOptions.find((a) => a.agent === activeAgent)}
         profiles={profiles}
         onEdit={(profile) => setEditing(profile)}
+        onDuplicate={duplicateProfile}
         onChanged={() => void reloadProfiles()}
       />
 
@@ -180,12 +208,14 @@ function ProfileList({
   agentSummary,
   profiles,
   onEdit,
+  onDuplicate,
   onChanged,
 }: {
   agent: AgentId;
   agentSummary?: AgentSummary;
   profiles: ProfileSummary[];
   onEdit: (profile: ProfileSummary) => void;
+  onDuplicate: (profile: ProfileSummary) => void;
   onChanged: () => void;
 }) {
   const { notify } = useApp();
@@ -208,6 +238,7 @@ function ProfileList({
           profile={profile}
           agent={agent}
           onEdit={() => onEdit(profile)}
+          onDuplicate={() => onDuplicate(profile)}
           onRequestDelete={() => setConfirmDelete(profile)}
           onChanged={onChanged}
         />
@@ -248,12 +279,14 @@ function ProfileRow({
   profile,
   agent,
   onEdit,
+  onDuplicate,
   onRequestDelete,
   onChanged,
 }: {
   profile: ProfileSummary;
   agent: AgentId;
   onEdit: () => void;
+  onDuplicate: () => void;
   onRequestDelete: () => void;
   onChanged: () => void;
 }) {
@@ -363,6 +396,14 @@ function ProfileRow({
         </Button>
         <Button size="sm" variant="ghost" onClick={onEdit}>
           Edit
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={onDuplicate}
+          aria-label={`Duplicate ${profile.name}`}
+        >
+          Duplicate
         </Button>
         <Button
           size="sm"

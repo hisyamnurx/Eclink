@@ -37,6 +37,7 @@ pub fn builder() -> BridgeResult<tauri::Builder<tauri::Wry>> {
             crate::commands::list_profiles,
             crate::commands::get_profile,
             crate::commands::save_profile,
+            crate::commands::duplicate_profile,
             crate::commands::delete_profile,
             crate::commands::profile_delete_impact,
             crate::commands::list_provider_templates,

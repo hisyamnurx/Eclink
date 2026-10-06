@@ -358,6 +358,97 @@ pub async fn profile_delete_impact(
     .await
 }
 
+/// Duplicate a profile, including its stored credential (PRD §18.4).
+///
+/// The copy is a new profile with its own id, so the secret store gains an
+/// independent record: rotating one key cannot affect the other. The plaintext
+/// key never leaves the backend — `SecretStore::copy` moves it between sealed
+/// records directly, rather than round-tripping through the frontend.
+///
+/// Compatibility verdicts are deliberately **not** copied. They describe a test
+/// performed against specific inputs, and the usual reason to duplicate a
+/// profile is to change the endpoint or model, at which point the inherited
+/// verdict would be exactly the stale evidence the app must not present.
+#[tauri::command]
+pub async fn duplicate_profile(
+    state: tauri::State<'_, AppState>,
+    id: String,
+) -> CommandResult<ProfileSummary> {
+    let state = state.inner().clone();
+    let id = require_id(&id, "Profile id")?;
+    blocking(move || {
+        let source = state
+            .profiles()
+            .load()?
+            .profiles
+            .into_iter()
+            .find(|profile| profile.id == id)
+            .ok_or_else(|| BridgeError::validation("That profile no longer exists."))?;
+
+        let mut copy = source.clone();
+        copy.id = uuid::Uuid::new_v4().to_string();
+        copy.name = unique_copy_name(&source.name, &state);
+        copy.compatibility = Default::default();
+        copy.secret_ref = None;
+
+        // Move the credential across inside the secrets module. `copy` reports
+        // false when the source had no key, which is a normal state.
+        let has_secret = match source.secret_ref.as_deref() {
+            Some(reference) => state.secrets().copy(reference, &copy.id)?,
+            None => false,
+        };
+        if has_secret {
+            copy.secret_ref = Some(copy.id.clone());
+        }
+
+        copy.validate().map_err(BridgeError::validation)?;
+
+        let saved = copy.clone();
+        state.profiles().update(|file| {
+            file.profiles.push(saved);
+            Ok(())
+        })?;
+
+        tracing::info!(
+            target: "eclyzer_bridge",
+            source_profile = %source.id,
+            "profile duplicated"
+        );
+
+        Ok(summarise(&state, copy))
+    })
+    .await
+}
+
+/// A name for the copy that does not collide with an existing profile.
+///
+/// Starts from "<name> copy" and appends a number only when needed, so the
+/// common case stays readable.
+fn unique_copy_name(source_name: &str, state: &AppState) -> String {
+    let taken: Vec<String> = state
+        .profiles()
+        .load()
+        .map(|file| {
+            file.profiles
+                .into_iter()
+                .map(|profile| profile.name)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let base = format!("{source_name} copy");
+    if !taken.iter().any(|name| name == &base) {
+        return base;
+    }
+    for n in 2..1000 {
+        let candidate = format!("{base} {n}");
+        if !taken.iter().any(|name| name == &candidate) {
+            return candidate;
+        }
+    }
+    base
+}
+
 /// Delete a profile and its stored key.
 ///
 /// The caller must have resolved any active use first; this command refuses to
@@ -643,6 +734,45 @@ mod tests {
         drop_stale_verdicts(&mut profile);
         assert!(profile.compatibility.is_empty());
         assert!(!profile.is_ready());
+    }
+
+    #[test]
+    fn a_duplicate_gets_a_new_id_and_name_and_no_verdicts() {
+        // The three properties that make a copy safe. Anything else is the
+        // source's own state and must not travel with it.
+        let source = tested_profile();
+        assert!(
+            !source.compatibility.is_empty(),
+            "fixture must have verdicts"
+        );
+
+        // Mirrors what `duplicate_profile` does.
+        let mut copy = source.clone();
+        copy.id = uuid::Uuid::new_v4().to_string();
+        copy.compatibility = Default::default();
+
+        assert_ne!(copy.id, source.id, "the copy must be a distinct profile");
+        assert!(
+            copy.compatibility.is_empty(),
+            "a verdict describes a test of the source, not the copy"
+        );
+        assert!(
+            !copy.is_ready(),
+            "an untested copy must not claim to be ready to activate"
+        );
+        // Everything else is carried over.
+        assert_eq!(copy.base_url, source.base_url);
+        assert_eq!(copy.model, source.model);
+        assert_eq!(copy.targets, source.targets);
+        assert_eq!(copy.provider_name, source.provider_name);
+    }
+
+    #[test]
+    fn a_duplicate_of_a_never_tested_profile_is_not_ready() {
+        let source = input().into_profile(None).unwrap();
+        let mut copy = source.clone();
+        copy.id = uuid::Uuid::new_v4().to_string();
+        assert!(!copy.is_ready());
     }
 
     #[test]

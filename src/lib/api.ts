@@ -330,6 +330,14 @@ export interface Commands {
   list_profiles: { args: Record<string, never>; result: ProfileSummary[] };
   get_profile: { args: { id: string }; result: ProfileSummary };
   save_profile: { args: { input: ProfileInput }; result: SaveProfileResult };
+  /**
+   * Copy a profile, including its stored key.
+   *
+   * The key never passes through the frontend: the backend moves it between
+   * sealed records itself, so a duplicate does not require the user to re-enter
+   * a credential they cannot read back.
+   */
+  duplicate_profile: { args: { id: string }; result: ProfileSummary };
   delete_profile: { args: { id: string; force: boolean }; result: null };
   profile_delete_impact: { args: { id: string }; result: DeleteImpact };
   list_provider_templates: { args: Record<string, never>; result: ProviderTemplate[] };

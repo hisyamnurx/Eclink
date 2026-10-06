@@ -145,6 +145,29 @@ impl SecretStore {
         self.save_raw(&data)
     }
 
+    /// Copy the secret at `from` to `to`, returning whether there was one.
+    ///
+    /// Duplicating a profile must not require the user to re-enter a credential
+    /// they cannot read back. The obvious implementation — read the key, hand it
+    /// to the frontend, and send it back through `put` — would put the plaintext
+    /// into the webview for no reason. Doing the copy here keeps it inside the
+    /// module that is allowed to see it.
+    ///
+    /// The sealed blob is re-sealed rather than copied verbatim, so the two
+    /// records are genuinely independent and rotating one cannot affect the
+    /// other. A missing source is not an error: a profile may legitimately have
+    /// no key stored yet.
+    pub fn copy(&self, from: &str, to: &str) -> BridgeResult<bool> {
+        if to.trim().is_empty() {
+            return Err(BridgeError::validation("The secret reference is missing."));
+        }
+        let Some(secret) = self.get(from)? else {
+            return Ok(false);
+        };
+        self.put(to, &secret)?;
+        Ok(true)
+    }
+
     /// Resolve a secret. Only called by code that genuinely needs the value.
     pub fn get(&self, id: &str) -> BridgeResult<Option<String>> {
         let data = self.load_raw()?;
@@ -227,6 +250,46 @@ mod tests {
         let (_dir, store) = store();
         store.put("s1", "sk-abcdef0123456789").unwrap();
         assert_eq!(store.get("s1").unwrap().unwrap(), "sk-abcdef0123456789");
+    }
+
+    #[test]
+    fn copy_moves_a_secret_between_records() {
+        let (_dir, store) = store();
+        store.put("source", "sk-copied-value").unwrap();
+
+        assert!(store.copy("source", "dest").unwrap());
+        assert_eq!(store.get("dest").unwrap().unwrap(), "sk-copied-value");
+        // The source must survive: a duplicate is not a move.
+        assert_eq!(store.get("source").unwrap().unwrap(), "sk-copied-value");
+        assert_eq!(store.count().unwrap(), 2);
+    }
+
+    #[test]
+    fn copy_reports_when_there_is_nothing_to_copy() {
+        // A profile may legitimately have no key stored yet. Duplicating it must
+        // succeed with no secret rather than fail.
+        let (_dir, store) = store();
+        assert!(!store.copy("absent", "dest").unwrap());
+        assert_eq!(store.get("dest").unwrap(), None);
+    }
+
+    #[test]
+    fn copy_makes_the_records_independent() {
+        // Replacing the copy's key must not disturb the source, and vice versa.
+        let (_dir, store) = store();
+        store.put("source", "sk-original").unwrap();
+        store.copy("source", "dest").unwrap();
+
+        store.put("dest", "sk-replaced").unwrap();
+        assert_eq!(store.get("source").unwrap().unwrap(), "sk-original");
+        assert_eq!(store.get("dest").unwrap().unwrap(), "sk-replaced");
+    }
+
+    #[test]
+    fn copy_rejects_an_empty_destination() {
+        let (_dir, store) = store();
+        store.put("source", "sk-value").unwrap();
+        assert!(store.copy("source", "   ").is_err());
     }
 
     #[test]
