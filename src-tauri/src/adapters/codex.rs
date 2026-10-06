@@ -741,6 +741,7 @@ impl AgentAdapter for CodexAdapter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::profiles::{AdvancedOptions, AuthMode};
 
     #[test]
     fn recognises_only_namespaced_provider_ids() {
@@ -1009,5 +1010,441 @@ base_url = "https://old.example.com"
         assert!(out.contains("model = \"user-model\""), "{out}");
         assert!(out.contains("model_provider = \"my_gateway\""), "{out}");
         assert!(!out.contains("eclyzer_bridge_old_1"), "{out}");
+    }
+
+    // -----------------------------------------------------------------------
+    // End-to-end adapter mutation tests.
+    //
+    // Everything above this point tests `CodexToml` or the pure helpers. These
+    // drive the real `CodexAdapter::mutate` sequence against a real file on disk:
+    // read, validate, snapshot, patch, atomic write, re-read, verify. That
+    // sequence is the code that actually rewrites a user's config.toml, and it
+    // previously had no test at all.
+    // -----------------------------------------------------------------------
+
+    /// A scratch `CODEX_HOME` plus an adapter pointed at it.
+    ///
+    /// The environment variable is process-wide, so these tests are serialised
+    /// with a mutex and always restore the previous value.
+    struct Scratch {
+        _dir: tempfile::TempDir,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var(CODEX_HOME_ENV, value) },
+                None => unsafe { std::env::remove_var(CODEX_HOME_ENV) },
+            }
+        }
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn scratch() -> (Scratch, BackupManager, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os(CODEX_HOME_ENV);
+        unsafe { std::env::set_var(CODEX_HOME_ENV, dir.path()) };
+        let config = dir.path().join("config.toml");
+        let backups = BackupManager::new(dir.path().join("backups"));
+        (
+            Scratch {
+                _dir: dir,
+                previous,
+            },
+            backups,
+            config,
+        )
+    }
+
+    fn profile_for_codex() -> Profile {
+        let mut p = Profile::new(
+            "P".to_string(),
+            "DeepSeek".to_string(),
+            "https://api.deepseek.com/v1".to_string(),
+            "deepseek-chat".to_string(),
+            vec![AgentId::Codex],
+        );
+        p.advanced = AdvancedOptions {
+            auth_mode: AuthMode::Bearer,
+            ..Default::default()
+        };
+        p
+    }
+
+    fn apply_options<'a>(secret: Option<&'a str>) -> ApplyOptions<'a> {
+        ApplyOptions {
+            secret,
+            helper_path: None,
+            expected_sha256: None,
+            agent_version: None,
+        }
+    }
+
+    #[test]
+    fn applying_a_profile_rewrites_the_config_and_preserves_user_settings() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        let original = "# my own comment\nmodel = \"my-model\"\napproval_policy = \"on-request\"\n";
+        std::fs::write(&config, original).unwrap();
+
+        let adapter = CodexAdapter::new(backups.clone());
+        let profile = profile_for_codex();
+        let outcome = adapter
+            .apply_profile(&profile, &apply_options(Some("sk-test-key")))
+            .expect("apply must succeed");
+
+        // The file was really written.
+        let written = std::fs::read_to_string(&config).unwrap();
+        assert_ne!(written, original, "the config must have changed");
+        assert!(written.contains("eclyzer_bridge"), "{written}");
+
+        // The user's data survived the rewrite, comment included.
+        assert!(written.contains("# my own comment"), "{written}");
+        assert!(
+            written.contains("approval_policy = \"on-request\""),
+            "{written}"
+        );
+
+        // The immutable original was taken, once, with the pre-change content.
+        let (_meta, saved) = backups
+            .read_original(AgentId::Codex.as_str())
+            .unwrap()
+            .expect("an original backup must exist");
+        assert_eq!(saved, original, "the original must be byte-for-byte");
+
+        // A snapshot was taken so the change is undoable.
+        assert_eq!(backups.snapshot_count(AgentId::Codex.as_str()), 1);
+        assert!(!outcome.snapshot_id.is_empty());
+    }
+
+    #[test]
+    fn the_api_key_is_never_written_into_config_toml() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        std::fs::write(&config, "model = \"my-model\"\n").unwrap();
+
+        let adapter = CodexAdapter::new(backups);
+        adapter
+            .apply_profile(
+                &profile_for_codex(),
+                &apply_options(Some("sk-super-secret")),
+            )
+            .expect("apply must succeed");
+
+        let written = std::fs::read_to_string(&config).unwrap();
+        // The whole point of the credential helper: the key is never in the file.
+        assert!(
+            !written.contains("sk-super-secret"),
+            "the API key leaked into config.toml: {written}"
+        );
+        assert!(
+            !written.to_lowercase().contains("authorization"),
+            "{written}"
+        );
+        assert!(!written.contains("experimental_bearer_token"), "{written}");
+    }
+
+    #[test]
+    fn applying_a_profile_to_an_invalid_config_is_a_hard_stop() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        // Unclosed table header: not valid TOML.
+        let broken = "model = \"m\"\n[model_providers.ooo\n";
+        std::fs::write(&config, broken).unwrap();
+
+        let adapter = CodexAdapter::new(backups.clone());
+        let err = adapter
+            .apply_profile(&profile_for_codex(), &apply_options(Some("sk-test")))
+            .expect_err("an unparsable config must block the write");
+
+        assert_eq!(err.kind, crate::error::ErrorKind::ConfigInvalid, "{err:?}");
+        // The file must be untouched, byte for byte.
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), broken);
+        // And nothing may have been backed up as if a change had happened.
+        assert!(!backups.has_original(AgentId::Codex.as_str()));
+    }
+
+    #[test]
+    fn a_config_changed_outside_bridge_aborts_the_write() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        std::fs::write(&config, "model = \"my-model\"\n").unwrap();
+
+        let adapter = CodexAdapter::new(backups);
+        let hash_before = adapter.current_hash().unwrap().unwrap();
+
+        // Someone edits the file in another editor.
+        let external = "model = \"edited-elsewhere\"\n";
+        std::fs::write(&config, external).unwrap();
+
+        // Applying with the stale hash must refuse rather than clobber the edit.
+        let options = ApplyOptions {
+            secret: Some("sk-test"),
+            helper_path: None,
+            expected_sha256: Some(hash_before),
+            agent_version: None,
+        };
+        let err = adapter
+            .apply_profile(&profile_for_codex(), &options)
+            .expect_err("an external change must abort the write");
+
+        assert_eq!(err.kind, crate::error::ErrorKind::ConfigConflict, "{err:?}");
+        assert_eq!(
+            std::fs::read_to_string(&config).unwrap(),
+            external,
+            "the external edit must be preserved"
+        );
+    }
+
+    #[test]
+    fn restore_default_removes_only_bridge_owned_overrides() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        // A user with their own provider and their own model choice, none of it
+        // Bridge's.
+        let original = "model_provider = \"my_gateway\"\nmodel = \"my-model\"\napproval_policy = \"on-request\"\n\n[model_providers.my_gateway]\nname = \"Mine\"\nbase_url = \"https://mine.example.com/v1\"\n";
+        std::fs::write(&config, original).unwrap();
+
+        let adapter = CodexAdapter::new(backups);
+        adapter
+            .restore_default(&apply_options(None))
+            .expect("restore default must succeed");
+
+        // PRD §16.6, §30.1: Restore Default removes only Bridge-owned
+        // provider/model overrides. It must not touch anything else, and in
+        // particular must not delete the user's own model choice, which Bridge
+        // never owned in this state.
+        let restored = std::fs::read_to_string(&config).unwrap();
+        assert_eq!(
+            restored, original,
+            "Restore Default must be a no-op when Bridge owns nothing"
+        );
+    }
+
+    #[test]
+    fn restore_default_after_applying_removes_the_bridge_overrides() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        let original = "approval_policy = \"on-request\"\n";
+        std::fs::write(&config, original).unwrap();
+
+        let adapter = CodexAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_codex(), &apply_options(Some("sk-test")))
+            .expect("apply must succeed");
+        assert!(std::fs::read_to_string(&config)
+            .unwrap()
+            .contains("eclyzer_bridge"));
+
+        adapter
+            .restore_default(&apply_options(None))
+            .expect("restore default must succeed");
+
+        let restored = std::fs::read_to_string(&config).unwrap();
+        // Every Bridge-owned override is gone...
+        assert!(!restored.contains("eclyzer_bridge"), "{restored}");
+        assert!(!restored.contains("model_provider"), "{restored}");
+        assert!(!restored.contains("deepseek-chat"), "{restored}");
+        // ...and the unrelated user setting survives (PRD §16.6, §30.1).
+        assert!(
+            restored.contains("approval_policy = \"on-request\""),
+            "{restored}"
+        );
+        // No stray table header is left behind for the removed provider.
+        assert!(!restored.contains("[model_providers]"), "{restored}");
+    }
+
+    #[test]
+    fn restore_default_never_logs_the_user_out_or_drops_auth() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (scratch, backups, config) = scratch();
+        // Codex keeps ChatGPT credentials in auth.json next to config.toml.
+        let auth = scratch._dir.path().join("auth.json");
+        let auth_body = r#"{"tokens":{"access_token":"chatgpt-session"}}"#;
+        std::fs::write(&auth, auth_body).unwrap();
+        // Plus a sessions directory.
+        let sessions = scratch._dir.path().join("sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("rollout.jsonl"), "{\"a\":1}").unwrap();
+        std::fs::write(&config, "model = \"my-model\"\n").unwrap();
+
+        let adapter = CodexAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_codex(), &apply_options(Some("sk-test")))
+            .expect("apply must succeed");
+        adapter
+            .restore_default(&apply_options(None))
+            .expect("restore default must succeed");
+
+        // PRD §16.6, §30.1 and the release checklist: never delete auth.json,
+        // never log the user out, never delete sessions.
+        assert_eq!(
+            std::fs::read_to_string(&auth).unwrap(),
+            auth_body,
+            "auth.json must be untouched"
+        );
+        assert!(
+            sessions.join("rollout.jsonl").exists(),
+            "sessions must be untouched"
+        );
+    }
+
+    #[test]
+    fn the_users_own_model_choice_is_recoverable_after_an_activation() {
+        // Documented behaviour, asserted so it cannot change silently:
+        //
+        // Activating a profile overwrites `model`, because a gateway profile
+        // carries its own model ID. Restore Default then removes `model` along
+        // with Bridge's `model_provider` (it is Bridge-owned in that state), so
+        // the user's own earlier choice is NOT put back by Restore Default.
+        //
+        // The safety net is Restore Original, which returns the file exactly as
+        // it was before Bridge ever ran. That path is asserted here, because
+        // "the user's model can be lost by Restore Default" is only acceptable
+        // while a full-fidelity recovery exists.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        let original = "model = \"my-model\"\napproval_policy = \"on-request\"\n";
+        std::fs::write(&config, original).unwrap();
+
+        let adapter = CodexAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_codex(), &apply_options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        // Bridge replaced the user's model with the profile's.
+        let applied = std::fs::read_to_string(&config).unwrap();
+        assert!(applied.contains("deepseek-chat"), "{applied}");
+        assert!(!applied.contains("my-model"), "{applied}");
+
+        // Restore Original brings the user's own choice back, byte for byte.
+        adapter
+            .restore_original(&apply_options(None))
+            .expect("restore original must succeed");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    }
+
+    #[test]
+    fn restore_original_brings_back_the_pre_bridge_file() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        let original = "# untouched\nmodel = \"my-model\"\n";
+        std::fs::write(&config, original).unwrap();
+
+        let adapter = CodexAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_codex(), &apply_options(Some("sk-test")))
+            .expect("apply must succeed");
+        adapter
+            .restore_original(&apply_options(None))
+            .expect("restore original must succeed");
+
+        // Exactly the bytes the user had before Bridge ever touched the file.
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+    }
+
+    #[test]
+    fn undo_returns_to_the_previous_state_and_is_itself_reversible() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        let original = "model = \"my-model\"\n";
+        std::fs::write(&config, original).unwrap();
+
+        let adapter = CodexAdapter::new(backups.clone());
+        adapter
+            .apply_profile(&profile_for_codex(), &apply_options(Some("sk-test")))
+            .expect("apply must succeed");
+        let after_apply = std::fs::read_to_string(&config).unwrap();
+
+        // Restoring the snapshot taken before the change must undo it.
+        let snapshot = backups
+            .snapshots()
+            .latest(AgentId::Codex.as_str())
+            .unwrap()
+            .expect("a snapshot exists");
+        assert_eq!(
+            snapshot.content, original,
+            "the snapshot is the pre-change state"
+        );
+
+        adapter
+            .restore_snapshot(&snapshot, &apply_options(None))
+            .expect("restore snapshot must succeed");
+        assert_eq!(std::fs::read_to_string(&config).unwrap(), original);
+
+        // Undo must itself be undoable: restoring took its own snapshot first.
+        let snapshots = backups.snapshots().list(AgentId::Codex.as_str()).unwrap();
+        assert!(
+            snapshots.len() >= 2,
+            "restoring must snapshot the state it overwrote"
+        );
+        // The newest snapshot must hold what the restore overwrote, so a second
+        // undo can bring the applied state back.
+        let newest = backups
+            .snapshots()
+            .latest(AgentId::Codex.as_str())
+            .unwrap()
+            .expect("a newest snapshot exists");
+        assert_eq!(
+            newest.content, after_apply,
+            "the newest snapshot must hold what was overwritten"
+        );
+    }
+
+    #[test]
+    fn a_second_apply_does_not_overwrite_the_immutable_original() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        let original = "model = \"my-model\"\n";
+        std::fs::write(&config, original).unwrap();
+
+        let adapter = CodexAdapter::new(backups.clone());
+        let profile = profile_for_codex();
+        adapter
+            .apply_profile(&profile, &apply_options(Some("sk-one")))
+            .expect("first apply");
+        adapter
+            .apply_profile(&profile, &apply_options(Some("sk-two")))
+            .expect("second apply");
+
+        // The original is the file as it was before Bridge ever ran, not the
+        // intermediate state.
+        let (_meta, saved) = backups
+            .read_original(AgentId::Codex.as_str())
+            .unwrap()
+            .unwrap();
+        assert_eq!(saved, original);
+        assert_eq!(backups.snapshot_count(AgentId::Codex.as_str()), 2);
+    }
+
+    #[test]
+    fn the_provider_id_is_namespaced_and_never_collides_with_a_builtin() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        // A user who has configured Codex's built-in providers.
+        std::fs::write(
+            &config,
+            "model_provider = \"openai\"\n\n[model_providers.openai]\nname = \"OpenAI\"\nbase_url = \"https://api.openai.com/v1\"\n\n[model_providers.ollama]\nname = \"Ollama\"\nbase_url = \"http://localhost:11434/v1\"\n",
+        )
+        .unwrap();
+
+        let adapter = CodexAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_codex(), &apply_options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let written = std::fs::read_to_string(&config).unwrap();
+        // The built-ins must be intact and must not have been repointed.
+        assert!(written.contains("[model_providers.openai]"), "{written}");
+        assert!(
+            written.contains("https://api.openai.com/v1"),
+            "the built-in OpenAI URL must not be rewritten: {written}"
+        );
+        assert!(written.contains("[model_providers.ollama]"), "{written}");
+        assert!(written.contains("http://localhost:11434/v1"), "{written}");
+        // And Bridge's own entry is namespaced.
+        assert!(written.contains("eclyzer_bridge_"), "{written}");
     }
 }
