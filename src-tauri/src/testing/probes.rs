@@ -225,8 +225,15 @@ impl ProbeTarget {
     }
 }
 
-/// Classify a non-success response into an actionable outcome.
+/// Classify a response into an actionable outcome.
+///
+/// A success status means the request was accepted, which is the answer the
+/// authentication probe is looking for; the `_` arm only ever sees an unusual
+/// status code, since non-success codes are enumerated above.
 fn classify_status(status: reqwest::StatusCode, body: &str) -> ProbeOutcome {
+    if status.is_success() {
+        return ProbeOutcome::Supported;
+    }
     match status.as_u16() {
         401 | 403 => ProbeOutcome::Unauthorized,
         // A 404 usually means the endpoint does not implement that API path at
@@ -335,7 +342,6 @@ async fn execute(
             return Err(ProbeResult::new(outcome, elapsed).with_detail(detail));
         }
     };
-
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     let elapsed = started.elapsed().as_millis() as u64;

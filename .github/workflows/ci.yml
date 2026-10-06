@@ -1,0 +1,128 @@
+name: CI
+
+# Runs on every pull request and on pushes to the default branch. The goal is to
+# make a broken build impossible to merge, not to be fast for its own sake.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Least privilege: this workflow only reads the repository.
+permissions:
+  contents: read
+
+# A newer push supersedes an in-flight run on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Fail on warnings: a warning that is allowed to accumulate is a warning nobody
+  # reads, and this project's whole value proposition is that it does not do
+  # careless things to a user's configuration file.
+  RUSTFLAGS: -D warnings
+
+jobs:
+  frontend:
+    name: Frontend
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format check
+        run: npm run format:check
+
+      - name: Test
+        run: npm test
+
+      - name: Build the web bundle
+        run: npx vite build
+
+  rust:
+    name: Rust
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          # A single shared target directory at the repository root.
+          workspaces: ". -> target"
+
+      - name: Format check
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Build the helper
+        # The helper is a build artefact the integration tests depend on, and it
+        # is also a declared Tauri resource.
+        run: cargo build --release -p eclyzer-bridge-helper
+
+      - name: Test
+        run: cargo test --workspace
+
+  build:
+    name: Build the installer
+    runs-on: windows-latest
+    needs: [frontend, rust]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ". -> target"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build the helper
+        run: cargo build --release -p eclyzer-bridge-helper
+
+      - name: Build the application
+        # A pull request verifies that the app compiles and bundles, but it does
+        # not produce a signed release; signing material is only available to the
+        # release workflow.
+        run: npx tauri build --no-bundle
+
+      - name: Verify the app binary exists
+        shell: pwsh
+        run: |
+          $app = "target/release/eclyzer-bridge.exe"
+          $helper = "target/release/eclyzer-bridge-helper.exe"
+          foreach ($path in @($app, $helper)) {
+            if (-not (Test-Path $path)) {
+              Write-Error "Expected build output is missing: $path"
+              exit 1
+            }
+            $size = (Get-Item $path).Length
+            Write-Host "$path ($size bytes)"
+          }
