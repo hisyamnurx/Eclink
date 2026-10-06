@@ -6,7 +6,7 @@
 
 use crate::app::AppState;
 use crate::commands::{parse_agent, CommandResult};
-use crate::error::{BridgeError, BridgeResult};
+use crate::error::BridgeError;
 use crate::testing::playground::PlaygroundResult;
 
 /// The largest prompt we will forward.
