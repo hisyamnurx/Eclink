@@ -580,6 +580,73 @@ mod tests {
     }
 
     #[test]
+    fn a_freshly_recorded_verdict_is_not_stale() {
+        // The list screen drops stale records before showing them, and it
+        // compares with `None` because that is what the test command records
+        // with. If those two ever disagreed, every newly tested profile would
+        // immediately appear untested - a confusing regression rather than a
+        // safety one, but one that would be blamed on the provider.
+        let mut p = profile();
+        let key = p.compatibility_stale_key(AgentId::Codex, None);
+        p.compatibility.insert(
+            AgentId::Codex,
+            CompatibilityRecord {
+                status: CompatibilityStatus::Compatible,
+                stale_key: Some(key),
+                ..Default::default()
+            },
+        );
+        assert!(
+            !p.compatibility_is_stale(AgentId::Codex, None),
+            "a verdict recorded against the current inputs must survive"
+        );
+        assert!(p.is_ready(), "and it must still allow activation");
+    }
+
+    #[test]
+    fn editing_the_model_invalidates_the_cached_verdict() {
+        // The concrete case the list screen must not paper over: test against
+        // one model, then change it.
+        let mut p = profile();
+        p.compatibility.insert(
+            AgentId::Codex,
+            CompatibilityRecord {
+                status: CompatibilityStatus::Compatible,
+                stale_key: Some(p.compatibility_stale_key(AgentId::Codex, None)),
+                ..Default::default()
+            },
+        );
+        assert!(!p.compatibility_is_stale(AgentId::Codex, None));
+        p.model = "a-different-model".into();
+        assert!(
+            p.compatibility_is_stale(AgentId::Codex, None),
+            "changing the model must invalidate a passing verdict"
+        );
+    }
+
+    #[test]
+    fn swapping_the_stored_credential_invalidates_the_cached_verdict() {
+        let mut p = profile();
+        p.secret_ref = Some("ref-one".into());
+        p.compatibility.insert(
+            AgentId::Codex,
+            CompatibilityRecord {
+                status: CompatibilityStatus::Compatible,
+                stale_key: Some(p.compatibility_stale_key(AgentId::Codex, None)),
+                ..Default::default()
+            },
+        );
+        assert!(!p.compatibility_is_stale(AgentId::Codex, None));
+
+        // The user replaces the key: the old verdict was for a different credential.
+        p.secret_ref = Some("ref-two".into());
+        assert!(
+            p.compatibility_is_stale(AgentId::Codex, None),
+            "a different key must invalidate a passing verdict"
+        );
+    }
+
+    #[test]
     fn base_url_normalization() {
         assert_eq!(
             normalize_base_url("https://api.x.com/v1/"),

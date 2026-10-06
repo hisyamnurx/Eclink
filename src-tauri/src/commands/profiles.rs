@@ -153,7 +153,33 @@ pub async fn list_profiles(
     .await
 }
 
-fn summarise(state: &AppState, profile: Profile) -> ProfileSummary {
+/// Remove cached compatibility verdicts that no longer describe the profile's
+/// current inputs.
+///
+/// Extracted so the rule is testable without an `AppState`.
+///
+/// Without this, editing the base URL, model, or stored credential after a
+/// successful test left the "Compatible" badge and the enabled Activate button
+/// in place, because the cached record was served verbatim.
+/// `compatibility_is_stale` already knew how to detect this; nothing called it.
+///
+/// The agent version is passed as `None` to match how the record is written
+/// (`test_profile_connection` records with `None`); using a detected version
+/// here would make every freshly written record look stale immediately.
+fn drop_stale_verdicts(profile: &mut Profile) {
+    let stale: Vec<AgentId> = [AgentId::Codex, AgentId::Claude]
+        .into_iter()
+        .filter(|agent| {
+            profile.compatibility.contains_key(agent)
+                && profile.compatibility_is_stale(*agent, None)
+        })
+        .collect();
+    for agent in stale {
+        profile.compatibility.remove(&agent);
+    }
+}
+
+fn summarise(state: &AppState, mut profile: Profile) -> ProfileSummary {
     let (has_secret, fingerprint) = match profile.secret_ref.as_deref() {
         Some(reference) => match state.secrets().fingerprint(reference) {
             Ok(Some(fingerprint)) => (true, Some(fingerprint)),
@@ -161,6 +187,9 @@ fn summarise(state: &AppState, profile: Profile) -> ProfileSummary {
         },
         None => (false, None),
     };
+
+    drop_stale_verdicts(&mut profile);
+
     let ready = profile.is_ready();
     ProfileSummary {
         profile,
@@ -509,6 +538,111 @@ mod tests {
         assert_eq!(profile.base_url, "https://api.deepseek.com/v1");
         assert_eq!(profile.targets, vec![AgentId::Codex, AgentId::Claude]);
         assert!(profile.secret_ref.is_none(), "a key is never set here");
+    }
+
+    /// A profile with a passing verdict recorded against its current inputs.
+    fn tested_profile() -> Profile {
+        let mut profile = input().into_profile(None).unwrap();
+        // Compute both keys against the untouched profile first: inserting a
+        // record does not affect the key, but computing them up front keeps the
+        // fixture obviously independent of insertion order.
+        let codex_key = profile.compatibility_stale_key(AgentId::Codex, None);
+        let claude_key = profile.compatibility_stale_key(AgentId::Claude, None);
+        for (agent, key) in [(AgentId::Codex, codex_key), (AgentId::Claude, claude_key)] {
+            profile.compatibility.insert(
+                agent,
+                crate::profiles::CompatibilityRecord {
+                    status: crate::profiles::CompatibilityStatus::Compatible,
+                    stale_key: Some(key),
+                    ..Default::default()
+                },
+            );
+        }
+        profile
+    }
+
+    #[test]
+    fn a_current_verdict_is_kept() {
+        let mut profile = tested_profile();
+        assert!(profile.is_ready());
+        drop_stale_verdicts(&mut profile);
+        assert_eq!(
+            profile.compatibility.len(),
+            2,
+            "verdicts recorded against the current inputs must survive"
+        );
+        assert!(profile.is_ready(), "and activation must still be allowed");
+    }
+
+    #[test]
+    fn a_verdict_for_an_edited_endpoint_is_dropped() {
+        let mut profile = tested_profile();
+        // The user repoints the profile at a different gateway.
+        profile.base_url = "https://somewhere-else.example.com/v1".into();
+        drop_stale_verdicts(&mut profile);
+        assert!(
+            profile.compatibility.is_empty(),
+            "a verdict measured against a different endpoint must not be shown"
+        );
+        assert!(
+            !profile.is_ready(),
+            "a stale verdict must not permit activation"
+        );
+    }
+
+    #[test]
+    fn a_verdict_for_an_edited_model_is_dropped() {
+        let mut profile = tested_profile();
+        profile.model = "a-different-model".into();
+        drop_stale_verdicts(&mut profile);
+        assert!(profile.compatibility.is_empty());
+        assert!(!profile.is_ready());
+    }
+
+    #[test]
+    fn a_verdict_for_a_replaced_credential_is_dropped() {
+        let mut profile = tested_profile();
+        profile.secret_ref = Some("a-newly-stored-key".into());
+        drop_stale_verdicts(&mut profile);
+        assert!(
+            profile.compatibility.is_empty(),
+            "a verdict measured with a different key must not be shown"
+        );
+    }
+
+    #[test]
+    fn dropping_stale_verdicts_is_per_agent() {
+        // Codex was re-tested after the edit; Claude was not. Only Claude's
+        // verdict may be dropped.
+        let mut profile = tested_profile();
+        profile.model = "a-different-model".into();
+        let refreshed = profile.compatibility_stale_key(AgentId::Codex, None);
+        profile.compatibility.insert(
+            AgentId::Codex,
+            crate::profiles::CompatibilityRecord {
+                status: crate::profiles::CompatibilityStatus::Compatible,
+                stale_key: Some(refreshed),
+                ..Default::default()
+            },
+        );
+
+        drop_stale_verdicts(&mut profile);
+        assert!(
+            profile.compatibility.contains_key(&AgentId::Codex),
+            "a fresh Codex verdict must survive"
+        );
+        assert!(
+            !profile.compatibility.contains_key(&AgentId::Claude),
+            "the stale Claude verdict must be dropped"
+        );
+    }
+
+    #[test]
+    fn dropping_stale_verdicts_leaves_a_profile_that_never_tested_alone() {
+        let mut profile = input().into_profile(None).unwrap();
+        drop_stale_verdicts(&mut profile);
+        assert!(profile.compatibility.is_empty());
+        assert!(!profile.is_ready());
     }
 
     #[test]
