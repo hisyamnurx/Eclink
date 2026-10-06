@@ -11,6 +11,7 @@
 mod agents;
 mod diagnostics;
 mod launch;
+mod playground;
 mod profiles;
 mod recovery;
 mod settings;
@@ -19,6 +20,7 @@ mod update;
 pub use agents::*;
 pub use diagnostics::*;
 pub use launch::*;
+pub use playground::*;
 pub use profiles::*;
 pub use recovery::*;
 pub use settings::*;

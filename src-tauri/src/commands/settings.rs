@@ -39,6 +39,9 @@ pub struct SettingsPatch {
     pub cost_notice_seen: Option<bool>,
     #[serde(default)]
     pub insecure_endpoint_notice_seen: Option<bool>,
+    /// Written only when the user launches with "remember this folder" on.
+    #[serde(default)]
+    pub last_project_directory: Option<String>,
 }
 
 /// Read the current settings and environment facts.
@@ -94,6 +97,20 @@ pub async fn update_settings(
             }
             if let Some(value) = patch.insecure_endpoint_notice_seen {
                 settings.insecure_endpoint_notice_seen = value;
+            }
+            // A remembered folder is only meaningful while remembering is on,
+            // and it must be an absolute path so a later launch cannot resolve
+            // relative to an unexpected working directory.
+            if let Some(value) = patch.last_project_directory {
+                let trimmed = value.trim();
+                let accept = settings.remember_project_directory
+                    && !trimmed.is_empty()
+                    && std::path::Path::new(trimmed).is_absolute();
+                settings.last_project_directory = if accept {
+                    Some(trimmed.to_string())
+                } else {
+                    None
+                };
             }
         })?;
 

@@ -21,7 +21,9 @@
     "exactOptionalPropertyTypes": false,
     "noImplicitOverride": true,
 
-    "types": ["vite/client", "vitest/globals"]
+    // `vite/client` types import.meta.env; `vitest/globals` types the test
+    // globals; `node` is only needed by vite.config.ts, which is included below.
+    "types": ["vite/client", "vitest/globals", "node"]
   },
   "include": ["src", "vite.config.ts"],
   "exclude": ["node_modules", "dist", "src-tauri"]

@@ -1,0 +1,81 @@
+/*
+ * Design tokens (PRD §34).
+ *
+ * Dark mode only. Every colour used anywhere in the app comes from here, so the
+ * palette can be audited in one place and no component invents its own grey.
+ *
+ * Accessibility notes are inline: the contrast ratios recorded below are why
+ * specific values were chosen, and the muted/dim greys are only ever used for
+ * text at the sizes noted.
+ */
+
+:root {
+  /* Accent */
+  --accent: #4f8cff;
+  --accent-soft: #8ab4ff;
+  --accent-glow: rgba(79, 140, 255, 0.12);
+
+  /* Surfaces */
+  --bg-base: #0a0a0b;
+  --bg-surface: #131417;
+  --bg-charcoal: #16171a;
+  --bg-graphite: #1d1f23;
+
+  /* Text — ratios are against --bg-base (#0a0a0b) */
+  --text-ink: #ececee; /* ~16.5:1 — body and headings */
+  --text-muted: #9a9ea6; /* ~7.4:1 — secondary text, still AA at body size */
+  --text-dim: #6f737b; /* ~4.1:1 — 14px+ only, for metadata */
+
+  /* Lines */
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Status. Never used alone: always paired with a text label. */
+  --status-ok: #4ade80;
+  --status-warn: #fbbf24;
+  --status-bad: #f87171;
+  --status-info: var(--accent-soft);
+
+  --hero-gradient: linear-gradient(100deg, #f1f3f6 10%, #a9c6ff 55%, #4f8cff 95%);
+
+  /* Type */
+  --font-body: "Manrope", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
+
+  /* Space */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  --radius-sm: 6px;
+  --radius: 10px;
+  --radius-lg: 14px;
+
+  --shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+
+  /* The single focus treatment used everywhere, so keyboard users always get
+     the same, highly visible indicator. */
+  --focus-ring: 0 0 0 2px var(--bg-base), 0 0 0 4px var(--accent);
+
+  --motion: 140ms;
+}
+
+/* Respect the operating system's reduced-motion preference (PRD §35.5). */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --motion: 0ms;
+  }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+}

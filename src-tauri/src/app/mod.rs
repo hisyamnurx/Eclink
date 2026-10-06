@@ -43,6 +43,8 @@ pub fn builder() -> BridgeResult<tauri::Builder<tauri::Wry>> {
             crate::commands::test_profile_connection,
             crate::commands::clear_compatibility,
             crate::commands::get_cost_notice,
+            // ---- playground ---------------------------------------------
+            crate::commands::playground_send,
             // ---- activation and launch ----------------------------------
             crate::commands::activate_profile,
             crate::commands::preview_launch,

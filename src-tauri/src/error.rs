@@ -156,6 +156,20 @@ impl BridgeError {
     pub fn update(message: impl Into<String>) -> Self {
         Self::new(ErrorKind::Update, message)
     }
+
+    /// The endpoint answered, but with an error. Distinct from `network`, which
+    /// means no answer arrived at all.
+    pub fn provider_error(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::ProviderError, message)
+    }
+
+    pub fn rate_limited(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::RateLimited, message)
+    }
+
+    pub fn model_not_found(message: impl Into<String>) -> Self {
+        Self::new(ErrorKind::ModelNotFound, message)
+    }
 }
 
 impl std::fmt::Display for BridgeError {

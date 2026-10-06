@@ -183,7 +183,11 @@ impl ProbeTarget {
             })
     }
 
-    fn apply_headers(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    /// Attach authentication, the version header, and any user extras.
+    ///
+    /// Public so the Playground sends requests through exactly the same header
+    /// path a probe uses; two code paths would eventually disagree.
+    pub fn apply_headers(&self, mut request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if !self.secret.is_empty() {
             request = match self.auth_mode {
                 AuthMode::Bearer => request.bearer_auth(self.secret.expose()),
@@ -210,7 +214,12 @@ impl ProbeTarget {
         request
     }
 
-    fn post(&self, path: &str, body: serde_json::Value) -> BridgeResult<reqwest::RequestBuilder> {
+    /// Build a POST to `path` with a JSON body and the standard headers.
+    pub fn post(
+        &self,
+        path: &str,
+        body: serde_json::Value,
+    ) -> BridgeResult<reqwest::RequestBuilder> {
         let client = self.client()?;
         Ok(self.apply_headers(client.post(self.url(path)).json(&body)))
     }
@@ -251,11 +260,19 @@ fn model_complaint(lower_body: &str) -> bool {
     MARKERS.iter().any(|marker| lower_body.contains(marker))
 }
 
+/// A redacted, bounded excerpt of an upstream error body.
+///
+/// Public so the Playground can attach provider detail to its errors without
+/// re-implementing redaction. An upstream error body is untrusted input and
+/// frequently echoes the request — including the `Authorization` header — so it
+/// must never reach the UI or a log verbatim.
+pub fn safe_error_excerpt(body: &str) -> String {
+    error_detail(body)
+}
+
 /// Extract a human message from an error body without trusting its shape.
 ///
-/// The result is redacted before it is returned. An upstream error body is
-/// untrusted input and frequently echoes the request — including the
-/// `Authorization` header — so it must never reach the UI or a log verbatim.
+/// The result is redacted before it is returned.
 fn error_detail(body: &str) -> String {
     let extracted = extract_message(body);
     let redacted = crate::diagnostics::redact_text(&extracted);

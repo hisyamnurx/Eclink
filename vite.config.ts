@@ -1,9 +1,13 @@
+/// <reference types="vitest/config" />
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
 // Tauri serves the frontend from a fixed dev port and needs a static build
 // output directory that `tauri.conf.json` -> `build.frontendDist` points at.
+// `process` is typed through the vitest/config reference above, which brings in
+// Node's globals for this config file only.
 const host = process.env.TAURI_DEV_HOST;
+const debug = Boolean(process.env.TAURI_ENV_DEBUG);
 
 export default defineConfig({
   plugins: [react()],
@@ -30,8 +34,10 @@ export default defineConfig({
   build: {
     // Tauri uses Chromium on Windows (WebView2).
     target: "chrome110",
-    minify: process.env.TAURI_ENV_DEBUG ? false : "esbuild",
-    sourcemap: !!process.env.TAURI_ENV_DEBUG,
+    // A debug build keeps readable output and source maps; a release build ships
+    // minified with no maps, so no source is exposed in the installer.
+    minify: debug ? false : "esbuild",
+    sourcemap: debug,
     outDir: "dist",
     emptyOutDir: true,
   },
@@ -40,5 +46,8 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     globals: true,
+    // Every test runs offline against a stubbed backend; no paid provider is
+    // ever contacted from the test suite.
+    restoreMocks: true,
   },
 });

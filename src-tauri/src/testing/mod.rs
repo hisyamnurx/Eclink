@@ -32,6 +32,7 @@
 //! hides that fact behind a "ping".
 
 pub mod pipeline;
+pub mod playground;
 pub mod probes;
 pub mod secret;
 

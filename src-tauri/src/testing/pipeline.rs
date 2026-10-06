@@ -123,7 +123,10 @@ pub fn resolve_secret(
 }
 
 /// Build a probe target from a profile, applying its advanced options.
-fn build_target(profile: &Profile, secret: Secret) -> BridgeResult<ProbeTarget> {
+///
+/// Public so the Playground sends requests with identical validation, header
+/// handling, and insecure-endpoint rules as Test Connection.
+pub fn build_target(profile: &Profile, secret: Secret) -> BridgeResult<ProbeTarget> {
     let mut target = ProbeTarget::new(
         &profile.base_url,
         profile.wire_model(),
