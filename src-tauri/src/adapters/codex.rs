@@ -801,9 +801,25 @@ base_url = "https://api.deepseek.com/v1"
 
         assert!(!out.contains("model_provider"), "{out}");
         assert!(!out.contains("deepseek-chat"), "{out}");
-        assert!(!out.contains("eclyzer_bridge"), "{out}");
         assert!(removed.contains(&"model".to_string()));
         assert!(removed.contains(&"model_provider".to_string()));
+
+        // The whole provider table must be gone, header included. The previous
+        // assertion here was `!out.contains("eclyzer_bridge")`, which can never
+        // be true in this fixture for two independent reasons: `toml_edit`
+        // deletes the parent table once it empties, and the marker's trailing
+        // 8 characters are a profile UUID the fixture never contains. It proved
+        // nothing. Asserting the empty parent header is what actually catches a
+        // lost no-orphan guarantee.
+        assert!(
+            !out.contains("[model_providers]"),
+            "an empty parent table header was left behind: {out}"
+        );
+        assert!(!out.contains("[model_providers."), "{out}");
+        assert!(
+            !out.contains("api.deepseek.com"),
+            "the provider URL survived: {out}"
+        );
     }
 
     #[test]
@@ -903,7 +919,23 @@ persistence = "none"
         let out = doc.to_string_preserving();
         assert!(!out.contains("experimental_bearer_token"), "{out}");
         assert!(!out.contains("env_key"), "{out}");
-        assert!(out.contains("auth"), "{out}");
+        // Pin the exact table header. The previous assertion was
+        // `out.contains("auth")`, three letters that are satisfied by `author`,
+        // `authored`, or any unrelated key — so a typo in the token-removal key
+        // name would have slipped through while a user's inlined key stayed in
+        // config.toml.
+        assert!(
+            out.contains("[model_providers.eclyzer_bridge_p_1.auth]"),
+            "the auth sub-table must be present exactly: {out}"
+        );
+        assert!(
+            out.contains("command = "),
+            "the auth table must carry a command: {out}"
+        );
+        assert!(
+            !out.contains("api_key") && !out.contains("bearer"),
+            "no credential-bearing key may be written: {out}"
+        );
     }
 
     #[test]

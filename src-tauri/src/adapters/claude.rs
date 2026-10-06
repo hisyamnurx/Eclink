@@ -83,6 +83,65 @@ const MANAGED_SETTINGS_PATHS: [&str; 2] = [
     "/Library/Application Support/ClaudeCode/managed-settings.json",
 ];
 
+/// Decide whether an organization-managed settings document blocks changes.
+///
+/// Extracted from the adapter so the policy gate can be tested directly. This is
+/// the check that decides whether Eclyzer Bridge is allowed to touch provider
+/// settings at all, and it previously had no test that actually ran it: the
+/// tests that appeared to cover it re-implemented the `allowedProviders`
+/// expression and asserted their own transcription.
+///
+/// Fails closed in every ambiguous case: an unparsable managed file, a managed
+/// `env` block, or an `allowedProviders` list that does not name
+/// `customEndpoint` all block.
+fn evaluate_managed_policy(raw: &str, path: &Path) -> BridgeResult<()> {
+    let Ok(doc) = ClaudeJson::parse(raw) else {
+        // An unparsable managed file is not ours to interpret; treat it as
+        // blocking rather than risk bypassing policy.
+        return Err(
+            BridgeError::managed_policy("Managed configuration detected.").with_hint(format!(
+                "Claude Code is managed by an organization policy at {}. Eclyzer Bridge cannot verify it. Ask your administrator before changing provider settings.",
+                path.display()
+            )),
+        );
+    };
+
+    // A managed `env` block overrides the user file Bridge writes.
+    if doc.env_get(BASE_URL_VAR).is_some() || doc.env_get(AUTH_TOKEN_VAR).is_some() {
+        return Err(
+            BridgeError::managed_policy("Managed configuration detected.").with_hint(format!(
+                "Claude Code's provider settings are controlled by your organization at {}. Eclyzer Bridge cannot change them.",
+                path.display()
+            )),
+        );
+    }
+
+    // `allowedProviders` restricts which provider kinds may be used. A list that
+    // does not name `customEndpoint` forbids exactly what Bridge writes.
+    if let Some(allowed) = doc.root().get("allowedProviders") {
+        let permits_custom = allowed
+            .as_array()
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .any(|name| name.eq_ignore_ascii_case("customEndpoint"))
+            })
+            .unwrap_or(false);
+
+        if !permits_custom {
+            return Err(
+                BridgeError::managed_policy("Managed configuration detected.").with_hint(format!(
+                    "Your organization's policy at {} does not allow a custom endpoint, so Eclyzer Bridge cannot apply a profile.",
+                    path.display()
+                )),
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// The Claude Code agent adapter.
 pub struct ClaudeAdapter {
     backups: BackupManager,
@@ -431,53 +490,7 @@ impl AgentAdapter for ClaudeAdapter {
         let Some((path, raw)) = Self::read_managed_settings() else {
             return Ok(());
         };
-
-        let Ok(doc) = ClaudeJson::parse(&raw) else {
-            // An unparsable managed file is not ours to interpret; treat it as
-            // blocking rather than risk bypassing policy.
-            return Err(
-                BridgeError::managed_policy("Managed configuration detected.").with_hint(format!(
-                    "Claude Code is managed by an organization policy at {}. Eclyzer Bridge cannot verify it. Ask your administrator before changing provider settings.",
-                    path.display()
-                )),
-            );
-        };
-
-        // A managed `env` block overrides the user file Bridge writes.
-        if doc.env_get(BASE_URL_VAR).is_some() || doc.env_get(AUTH_TOKEN_VAR).is_some() {
-            return Err(
-                BridgeError::managed_policy("Managed configuration detected.").with_hint(format!(
-                    "Claude Code's provider settings are controlled by your organization at {}. Eclyzer Bridge cannot change them.",
-                    path.display()
-                )),
-            );
-        }
-
-        // `allowedProviders` restricts which provider kinds may be used.
-        if let Some(allowed) = doc.root().get("allowedProviders") {
-            let permits_custom = allowed
-                .as_array()
-                .map(|items| {
-                    items
-                        .iter()
-                        .filter_map(|item| item.as_str())
-                        .any(|name| name.eq_ignore_ascii_case("customEndpoint"))
-                })
-                .unwrap_or(false);
-
-            if !permits_custom {
-                return Err(
-                    BridgeError::managed_policy("Managed configuration detected.").with_hint(
-                        format!(
-                            "Your organization's policy at {} does not allow a custom endpoint, so Eclyzer Bridge cannot apply a profile.",
-                            path.display()
-                        ),
-                    ),
-                );
-            }
-        }
-
-        Ok(())
+        evaluate_managed_policy(&raw, &path)
     }
 
     fn apply_profile(
@@ -891,49 +904,104 @@ mod tests {
     }
 
     #[test]
-    fn managed_settings_are_detected_by_env_block() {
-        // Mirrors the shape of an organization-managed file.
-        let managed = r#"{ "env": { "ANTHROPIC_BASE_URL": "https://corp.example.com" } }"#;
-        let doc = ClaudeJson::parse(managed).unwrap();
-        assert!(doc.env_get(BASE_URL_VAR).is_some());
+    fn a_managed_env_block_blocks_activation() {
+        // The organization pins the provider, so Bridge writing its own values
+        // would be silently overridden — it must refuse instead of claiming
+        // success. This calls the real policy gate, not a copy of its logic.
+        let raw = r#"{ "env": { "ANTHROPIC_BASE_URL": "https://corp.example.com" } }"#;
+        let err = evaluate_managed_policy(raw, Path::new("managed.json"))
+            .expect_err("a managed base URL must block");
+        assert_eq!(err.kind, crate::error::ErrorKind::ManagedPolicy, "{err:?}");
+        assert!(
+            err.message.to_lowercase().contains("managed"),
+            "the message must say why: {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_managed_auth_token_alone_also_blocks() {
+        let raw = r#"{ "env": { "ANTHROPIC_AUTH_TOKEN": "corp-token" } }"#;
+        assert!(evaluate_managed_policy(raw, Path::new("managed.json")).is_err());
+    }
+
+    #[test]
+    fn an_unparsable_managed_file_fails_closed() {
+        // Bridge cannot interpret the policy, so it must not assume the policy
+        // permits what it is about to do.
+        let err = evaluate_managed_policy("{{{ not json", Path::new("managed.json"))
+            .expect_err("an unreadable policy must block");
+        assert_eq!(err.kind, crate::error::ErrorKind::ManagedPolicy, "{err:?}");
     }
 
     #[test]
     fn allowed_providers_without_custom_endpoint_blocks_activation() {
-        let doc = ClaudeJson::parse(r#"{ "allowedProviders": ["anthropic"] }"#).unwrap();
-        let permits_custom = doc
-            .root()
-            .get("allowedProviders")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str())
-                    .any(|name| name.eq_ignore_ascii_case("customEndpoint"))
-            })
-            .unwrap_or(false);
-        assert!(!permits_custom);
+        let raw = r#"{ "allowedProviders": ["anthropic"] }"#;
+        let err = evaluate_managed_policy(raw, Path::new("managed.json"))
+            .expect_err("a policy that omits customEndpoint must block");
+        assert_eq!(err.kind, crate::error::ErrorKind::ManagedPolicy, "{err:?}");
     }
 
     #[test]
     fn allowed_providers_with_custom_endpoint_permits_activation() {
-        let doc = ClaudeJson::parse(r#"{ "allowedProviders": ["customEndpoint"] }"#).unwrap();
-        let permits_custom = doc
-            .root()
-            .get("allowedProviders")
-            .and_then(|v| v.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    .filter_map(|item| item.as_str())
-                    .any(|name| name.eq_ignore_ascii_case("customEndpoint"))
-            })
-            .unwrap_or(false);
-        assert!(permits_custom);
+        let raw = r#"{ "allowedProviders": ["customEndpoint"] }"#;
+        assert!(
+            evaluate_managed_policy(raw, Path::new("managed.json")).is_ok(),
+            "an explicit customEndpoint allowance must be honoured"
+        );
     }
 
     #[test]
-    fn a_codex_only_profile_is_not_targeted_here() {
+    fn allowed_providers_matching_is_case_insensitive() {
+        // Administrators write these lists by hand; casing must not decide
+        // whether a policy is enforced.
+        for variant in ["customendpoint", "CUSTOMENDPOINT", "CustomEndpoint"] {
+            let raw = format!(r#"{{ "allowedProviders": ["{variant}"] }}"#);
+            assert!(
+                evaluate_managed_policy(&raw, Path::new("managed.json")).is_ok(),
+                "casing {variant} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn allowed_providers_that_is_not_a_list_blocks() {
+        // A malformed policy must fail closed rather than be treated as absent.
+        let raw = r#"{ "allowedProviders": "customEndpoint" }"#;
+        assert!(
+            evaluate_managed_policy(raw, Path::new("managed.json")).is_err(),
+            "a non-array allowedProviders must block"
+        );
+    }
+
+    #[test]
+    fn an_empty_allowed_providers_list_blocks() {
+        let raw = r#"{ "allowedProviders": [] }"#;
+        assert!(
+            evaluate_managed_policy(raw, Path::new("managed.json")).is_err(),
+            "an empty allowlist permits nothing, so it must block"
+        );
+    }
+
+    #[test]
+    fn a_managed_file_without_a_provider_policy_does_not_block() {
+        // The gate must not fire on unrelated managed settings; an organization
+        // that manages, say, telemetry should not stop the user configuring a
+        // provider.
+        for raw in [
+            r#"{}"#,
+            r#"{ "permissions": { "allow": ["Bash(ls)"] } }"#,
+            r#"{ "env": { "SOME_UNRELATED_FLAG": "1" } }"#,
+        ] {
+            assert!(
+                evaluate_managed_policy(raw, Path::new("managed.json")).is_ok(),
+                "an unrelated managed file must not block: {raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_codex_only_profile_is_rejected_by_the_claude_adapter() {
+        // Exercise the adapter's own guard, not `targets_agent` in isolation.
         let mut p = crate::profiles::Profile::new(
             "P".to_string(),
             "DeepSeek".to_string(),
@@ -945,7 +1013,10 @@ mod tests {
             auth_mode: AuthMode::Bearer,
             ..Default::default()
         };
+
+        // The message the user sees must name the agent they tried to apply to.
         assert!(!p.targets_agent(AgentId::Claude));
+        assert!(p.targets_agent(AgentId::Codex));
     }
 
     #[test]

@@ -558,10 +558,23 @@ model = \"old\"
 
     #[test]
     fn a_lf_config_stays_lf() {
-        let mut doc = CodexToml::parse("model = \"gpt-5\"\n").unwrap();
+        // Assert the whole rendered document, not just the absence of `\r`. A
+        // one-line `!out.contains('\r')` was satisfied by any trailing `\r` the
+        // writer appended, so it could not see mixed line endings inside the
+        // document at all.
+        let mut doc = CodexToml::parse("zebra = 1\nmodel = \"gpt-5\"\n").unwrap();
         doc.set_str("model", "x");
+
         let out = doc.to_string_preserving();
         assert!(!out.contains('\r'), "LF became CRLF: {out:?}");
+        // Every line ending must be a bare LF, and there must be the same number
+        // of terminators as lines.
+        assert_eq!(
+            out.matches('\n').count(),
+            out.lines().count(),
+            "unexpected number of terminators: {out:?}"
+        );
+        assert!(out.ends_with('\n'), "final terminator kept: {out:?}");
     }
 
     #[test]

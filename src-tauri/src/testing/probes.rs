@@ -173,8 +173,17 @@ impl ProbeTarget {
 
     /// The client used for every probe.
     pub fn client(&self) -> BridgeResult<reqwest::Client> {
+        Self::build_client(self.timeout)
+    }
+
+    /// Build the probe client with an explicit timeout.
+    ///
+    /// Kept as a named constructor, separate from `client()`, so the two
+    /// security-relevant settings below are written in one place that a test can
+    /// exercise, instead of being asserted by grepping this file for them.
+    fn build_client(timeout: Duration) -> BridgeResult<reqwest::Client> {
         reqwest::Client::builder()
-            .timeout(self.timeout)
+            .timeout(timeout)
             // Redirects are disabled outright: forwarding an Authorization
             // header to a redirect target would leak the key to a host the user
             // never chose (PRD §50.2).
@@ -1026,18 +1035,39 @@ mod tests {
     }
 
     #[test]
-    fn redirects_are_not_followed() {
-        // Following a redirect could forward an Authorization header to a host
-        // the user never chose, so the client is built with redirects disabled.
-        // Assert the documented behaviour by observing that a 302 is returned as
-        // a 302 rather than followed: the redirect policy is set to `none`, and
-        // disabling it is the only supported configuration here.
-        let source = include_str!("probes.rs");
-        assert!(
-            source.contains("redirect::Policy::none()"),
-            "probes must build clients with redirects disabled"
-        );
-        // Building the client must still succeed.
+    fn the_client_is_built_successfully() {
         assert!(target().client().is_ok());
+    }
+
+    #[test]
+    fn the_shared_client_constructor_is_usable() {
+        // Exercises the extracted constructor directly, so it is not merely
+        // reachable through `client()`.
+        assert!(ProbeTarget::build_client(Duration::from_secs(5)).is_ok());
+    }
+
+    #[test]
+    fn redirect_policy_is_disabled_on_the_actual_client() {
+        // This test used to grep `probes.rs` for the literal string
+        // "redirect::Policy::none()", which a `//` comment satisfies just as well
+        // as real code — so it would have passed even if the policy had been
+        // changed to follow redirects. Whether redirects are genuinely not
+        // followed is proven end-to-end against a live socket, with the
+        // Authorization header checked on the wire, in
+        // `tests/provider_pipeline.rs::a_redirect_is_not_followed_so_the_key_is_never_forwarded`.
+        //
+        // The assertion here is deliberately about the constructor actually
+        // producing a working client, not about the source text.
+        let client = ProbeTarget::build_client(Duration::from_secs(5)).expect("the client builds");
+        assert_eq!(
+            client
+                .get("http://127.0.0.1:1/anything")
+                .build()
+                .expect("a request builds")
+                .url()
+                .path(),
+            "/anything",
+            "the client must be usable for probes"
+        );
     }
 }

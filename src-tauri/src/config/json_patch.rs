@@ -288,10 +288,34 @@ mod tests {
     fn env_remove_keeps_siblings() {
         let mut doc = ClaudeJson::parse(POPULATED).unwrap();
         assert!(doc.env_remove("MY_FLAG"));
-        assert!(doc.root().contains_key("env") || !doc.root().contains_key("env"));
-        // No panic and the rest survives.
+        // The removed key must be gone and the rest of the document untouched.
+        // The previous assertion here was `contains_key("env") || !contains_key("env")`,
+        // which is true for every possible document and proved nothing.
         let out = doc.to_string_preserving();
+        assert!(!out.contains("MY_FLAG"), "the removed key came back: {out}");
         assert!(out.contains("permissions"), "{out}");
+        assert!(out.contains("statusLine"), "{out}");
+        // `MY_FLAG` was the only env entry in this fixture, so the now-empty
+        // `env` object is dropped — that is the documented behaviour, and it is
+        // asserted here rather than asserted both ways.
+        assert_eq!(doc.env_keys(), Vec::<String>::new());
+    }
+
+    #[test]
+    fn env_remove_deletes_only_the_named_key() {
+        // The property the name actually promises, asserted positively.
+        let mut doc =
+            ClaudeJson::parse(r#"{ "env": { "KEEP_ONE": "a", "DROP": "b", "KEEP_TWO": "c" } }"#)
+                .unwrap();
+        assert!(doc.env_remove("DROP"));
+        assert_eq!(doc.env_get("DROP"), None);
+        assert_eq!(doc.env_get("KEEP_ONE"), Some("a"));
+        assert_eq!(doc.env_get("KEEP_TWO"), Some("c"));
+        // With siblings remaining, the env object must survive and keep order.
+        let out = doc.to_string_preserving();
+        let one = out.find("KEEP_ONE").expect("KEEP_ONE survives");
+        let two = out.find("KEEP_TWO").expect("KEEP_TWO survives");
+        assert!(one < two, "sibling order changed: {out}");
     }
 
     #[test]

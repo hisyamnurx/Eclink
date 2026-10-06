@@ -516,18 +516,47 @@ async fn an_unauthorized_models_request_is_reported_as_unauthorized() {
 }
 
 #[tokio::test]
-async fn malformed_json_from_the_models_endpoint_is_not_treated_as_success() {
-    // A 200 that is not JSON cannot be interpreted, so it must not be trusted as
-    // evidence that the model exists.
+async fn malformed_json_from_the_models_endpoint_does_not_claim_the_model_was_listed() {
+    // A 200 that is not JSON cannot be parsed, so Bridge must not report that the
+    // model appeared in a model list — that would be inventing evidence. It may
+    // still treat the endpoint as reachable, which is a real thing the 200
+    // proves, so the assertion pins exactly that distinction.
+    //
+    // The earlier version of this test was named
+    // `malformed_json_..._is_not_treated_as_success` but asserted
+    // `detail.is_none() || !detail.contains("lists")` — a disjunction that the
+    // production `Supported` fallback satisfies through its first branch. The
+    // name promised a stronger property than the body checked, and a change that
+    // started trusting any 200 body would not have failed it.
     let server = MockServer::start(vec![(
         "/v1/models".into(),
         Response::json(200, "this is not json at all"),
     )]);
     let result = probe_model(&target(&server, AuthMode::Bearer)).await;
-    // The implementation falls back to "supported" here because a non-JSON 200
-    // still proves the endpoint answered; what matters is that it does not
-    // panic or claim the model was listed.
-    assert!(result.detail.is_none() || !result.detail.as_deref().unwrap().contains("lists"));
+
+    // Whatever the outcome, Bridge must never assert the model was listed.
+    let detail = result.detail.clone().unwrap_or_default();
+    assert!(
+        !detail.to_lowercase().contains("listed"),
+        "a non-JSON body cannot prove the model was listed: {detail:?}"
+    );
+    assert!(
+        !detail.to_lowercase().contains("found"),
+        "a non-JSON body cannot prove the model was found: {detail:?}"
+    );
+    // And the outcome must be one of the defined variants.
+    assert!(
+        matches!(
+            result.outcome,
+            ProbeOutcome::Supported
+                | ProbeOutcome::Unsupported
+                | ProbeOutcome::UnknownModel
+                | ProbeOutcome::Unreachable
+                | ProbeOutcome::TimedOut
+        ),
+        "unexpected outcome for a non-JSON 200: {:?}",
+        result.outcome
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -676,7 +705,11 @@ async fn an_endpoint_that_rejects_tools_is_unsupported() {
         Response::json(400, r#"{"error":{"message":"tools are not supported"}}"#),
     )]);
     let result = probe_tool_calling(&target(&server, AuthMode::XApiKey), false).await;
-    assert_ne!(result.outcome, ProbeOutcome::Supported);
+    // Pin the exact outcome. `assert_ne!(.., Supported)` was satisfied by all
+    // seven other variants, so a 400 misclassified as `Unauthorized` — telling a
+    // user their working key was rejected and sending them to re-enter it — would
+    // have passed.
+    assert_eq!(result.outcome, ProbeOutcome::Unsupported);
 }
 
 // ---------------------------------------------------------------------------
