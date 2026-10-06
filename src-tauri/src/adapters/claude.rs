@@ -41,6 +41,8 @@
 
 use std::path::{Path, PathBuf};
 
+use serde::Serialize;
+
 use crate::adapters::detect;
 use crate::adapters::{
     ActiveConfiguration, AgentAdapter, AgentDetection, AgentDiagnostics, ApplyOptions,
@@ -68,11 +70,67 @@ pub const BASE_URL_VAR: &str = "ANTHROPIC_BASE_URL";
 /// a bearer token.
 pub const AUTH_TOKEN_VAR: &str = "ANTHROPIC_AUTH_TOKEN";
 
-/// Model variable, written only when the profile pins a model alias.
+/// Model variable.
+///
+/// **Not written by activation any more.** The official precedence list puts the
+/// `model` settings key above `ANTHROPIC_DEFAULT_MODEL`, but `ANTHROPIC_MODEL` is
+/// a *session* variable: it applies to the session that was launched with it and,
+/// as the documentation puts it, "Claude Code returns to that variable's model on
+/// the next launch, whatever you saved with /model". Writing it into `env` made
+/// every Claude Code session on the machine use Bridge's model regardless of what
+/// the user later chose, which is both surprising and hard to undo.
+///
+/// It is still *removed* when present, because a value Bridge wrote previously
+/// outranks the `model` key and would silently defeat activation.
 pub const MODEL_VAR: &str = "ANTHROPIC_MODEL";
 
+/// The `env` key naming the model a new session starts on.
+///
+/// Lower precedence than the `model` settings key, so Bridge sets the key rather
+/// than this. It is useful as a fallback for a Claude Code version too old to
+/// have the `model` behaviour Bridge relies on, and it is honoured when nothing
+/// else selects a model.
+pub const DEFAULT_MODEL_VAR: &str = "ANTHROPIC_DEFAULT_MODEL";
+
+/// The four family-alias variables.
+///
+/// Each one makes the `/model` picker show **one row for that model in place of
+/// the family's built-in rows**. That is precisely why they accumulated: writing
+/// them is not how a default model is chosen, and every activation that wrote
+/// them left another picker row behind, which is the reported symptom. Bridge no
+/// longer writes them, and removes the ones it can prove it wrote.
+pub const FAMILY_ALIAS_VARS: [&str; 4] = [
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+];
+
+/// The settings key that selects the model for new sessions.
+///
+/// Scope is any settings file, and a value here outranks `ANTHROPIC_DEFAULT_MODEL`.
+/// This is the officially supported persistent mechanism, and it is what
+/// activation writes.
+pub const MODEL_SETTINGS_KEY: &str = "model";
+
 /// Every `env` key Bridge may write, used for cleanup and ownership reporting.
-pub const MANAGED_ENV_VARS: [&str; 3] = [BASE_URL_VAR, AUTH_TOKEN_VAR, MODEL_VAR];
+pub const MANAGED_ENV_VARS: [&str; 2] = [BASE_URL_VAR, AUTH_TOKEN_VAR];
+
+/// Every `env` key Bridge owns and must therefore clean up.
+///
+/// Superset of [`MANAGED_ENV_VARS`]: it also lists keys Bridge wrote in earlier
+/// versions and no longer writes. Leaving them behind is exactly the bug this
+/// work fixes, so removal is driven by this list rather than by what the current
+/// version happens to write.
+pub const OWNED_ENV_VARS: [&str; 3] = [BASE_URL_VAR, AUTH_TOKEN_VAR, MODEL_VAR];
+
+/// The `model` value that clears a model override.
+///
+/// The documentation defines `default` as "a special value that clears any model
+/// override and reverts to the runtime default for your account". Writing it is
+/// the supported way to undo an override without deleting the key, which keeps
+/// the file's shape stable for anything else that reads it.
+pub const MODEL_DEFAULT_ALIAS: &str = "default";
 
 /// Organization-managed settings locations, checked in precedence order.
 ///
@@ -82,6 +140,38 @@ const MANAGED_SETTINGS_PATHS: [&str; 2] = [
     r"C:\ProgramData\ClaudeCode\managed-settings.json",
     "/Library/Application Support/ClaudeCode/managed-settings.json",
 ];
+
+/// Whether a family-alias or default-model value is one Eclyzer Bridge wrote.
+///
+/// Ownership has to be *proved* rather than assumed, because these variables can
+/// also be set by hand or by an administrator, and deleting the user's own
+/// configuration is worse than leaving a stale alias behind.
+///
+/// Two independent pieces of evidence count:
+///
+/// * the value names the model being activated, which is what Bridge writes; or
+/// * the value carries an Eclyzer Bridge provider prefix.
+///
+/// A `[1m]` context suffix is ignored when comparing, because Claude Code accepts
+/// it on these variables and treats the rest as the model ID.
+fn alias_is_bridge_owned(existing: &str, activating: &str) -> bool {
+    let normalise = |value: &str| {
+        value
+            .trim()
+            .trim_end_matches("[1m]")
+            .trim()
+            .to_ascii_lowercase()
+    };
+    let existing = normalise(existing);
+    let activating = normalise(activating);
+    if existing.is_empty() {
+        return false;
+    }
+    if existing == activating {
+        return true;
+    }
+    existing.starts_with(crate::MANAGED_PROVIDER_PREFIX)
+}
 
 /// Decide whether an organization-managed settings document blocks changes.
 ///
@@ -195,19 +285,67 @@ impl ClaudeAdapter {
         doc.env_get(key).map(str::to_string)
     }
 
-    /// Remove every Bridge-written `env` entry.
+    /// Remove every setting Eclyzer Bridge owns, leaving the user's own alone.
     ///
-    /// Only the variables Bridge itself writes are removed. Any other `env`
-    /// entry the user has (their own flags, proxy settings, telemetry switches)
-    /// is preserved, and an `env` object left empty is dropped entirely rather
-    /// than left behind as `{}` (PRD §17, §18.3).
+    /// Removes:
+    ///
+    /// * the `env` keys Bridge writes (`ANTHROPIC_BASE_URL`,
+    ///   `ANTHROPIC_AUTH_TOKEN`) and the ones it wrote in earlier versions
+    ///   (`ANTHROPIC_MODEL`);
+    /// * the `model` key, **but only when it names the model of the profile
+    ///   Bridge has active** — a user who chose their own model keeps it;
+    /// * family-alias variables and `ANTHROPIC_DEFAULT_MODEL` that are provably
+    ///   Bridge-shaped.
+    ///
+    /// Everything else the user has — their own flags, proxy settings, telemetry
+    /// switches, permissions, hooks, plugins — is preserved, and an `env` object
+    /// left empty is dropped rather than left as `{}` (PRD §17, §18.3).
     fn strip_managed(doc: &mut ClaudeJson) -> Vec<String> {
         let mut removed = Vec::new();
-        for key in MANAGED_ENV_VARS {
+
+        // Captured before anything is removed: ownership of the model keys is
+        // decided by comparing them against the model Bridge activated.
+        let bridge_model = doc
+            .env_get(MODEL_VAR)
+            .map(str::to_string)
+            .or_else(|| doc.env_get(DEFAULT_MODEL_VAR).map(str::to_string))
+            .or_else(|| doc.get_str(MODEL_SETTINGS_KEY).map(str::to_string));
+
+        for key in OWNED_ENV_VARS {
             if doc.env_remove(key) {
                 removed.push(format!("env.{key}"));
             }
         }
+
+        // The `model` key. It is only removed when it names a model Bridge can
+        // account for; otherwise the user set it and it stays.
+        if let (Some(current), Some(bridge_model)) = (
+            doc.get_str(MODEL_SETTINGS_KEY).map(str::to_string),
+            &bridge_model,
+        ) {
+            if alias_is_bridge_owned(&current, bridge_model) {
+                doc.remove(MODEL_SETTINGS_KEY);
+                removed.push(MODEL_SETTINGS_KEY.to_string());
+            }
+        }
+
+        if let Some(reference) = &bridge_model {
+            for key in FAMILY_ALIAS_VARS {
+                if let Some(existing) = doc.env_get(key).map(str::to_string) {
+                    if alias_is_bridge_owned(&existing, reference) {
+                        doc.env_remove(key);
+                        removed.push(format!("env.{key}"));
+                    }
+                }
+            }
+            if let Some(existing) = doc.env_get(DEFAULT_MODEL_VAR).map(str::to_string) {
+                if alias_is_bridge_owned(&existing, reference) {
+                    doc.env_remove(DEFAULT_MODEL_VAR);
+                    removed.push(format!("env.{DEFAULT_MODEL_VAR}"));
+                }
+            }
+        }
+
         removed
     }
 
@@ -363,6 +501,197 @@ impl ClaudeAdapter {
             "managedKeys": keys,
         });
         write_atomic(&path, serde_json::to_string_pretty(&payload)?.as_bytes())
+    }
+}
+
+/// A settings source that can outrank the user settings file Bridge writes.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelOverride {
+    /// Stable identifier, e.g. `environment` or `project`.
+    pub source: String,
+    /// What the user should read, e.g. `Environment variable`.
+    pub label: String,
+    /// The model that source would select.
+    pub model: String,
+    /// Where it came from, when it is a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Whether Eclyzer Bridge is allowed to change it.
+    pub changeable: bool,
+    /// What the user can do about it.
+    pub hint: String,
+}
+
+/// The model a new Claude Code session would start on, and what chose it.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectiveClaudeModel {
+    /// The model that wins, when one can be determined.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+    /// `bridge`, `environment`, `project`, `local`, `managed`, or `account`.
+    pub source: String,
+    /// A sentence naming the winning source, for display.
+    pub description: String,
+    /// Sources that would override Bridge's selection, highest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub overrides: Vec<ModelOverride>,
+}
+
+/// Read the `model` key from a settings file, if the file has one.
+fn model_in_settings_file(path: &Path) -> Option<String> {
+    let raw = crate::config::fs::read_to_string_opt(path).ok().flatten()?;
+    let value: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    value
+        .get(MODEL_SETTINGS_KEY)
+        .and_then(|v| v.as_str())
+        .map(str::to_string)
+        .filter(|s| !s.trim().is_empty())
+}
+
+/// Work out which model Claude Code will actually use, and why.
+///
+/// This is deliberately a *report*, not a correction. The app's own settings file
+/// is only one of several sources, and the documentation is explicit that some of
+/// them outrank it and reapply at every launch. Claiming activation succeeded
+/// while a higher-precedence source is winning would be a lie, so the winning
+/// source is named instead.
+///
+/// Precedence, highest first, from the official model-configuration page:
+///
+/// 1. `--model` / `/model` — per session; cannot be predicted for a future
+///    launch, so it is not reported as a conflict.
+/// 2. `ANTHROPIC_MODEL` in the environment.
+/// 3. A `model` value in **managed** settings.
+/// 4. A `model` value in **project** or **project-local** settings.
+/// 5. A `model` value in the **user** settings file — what Bridge writes.
+/// 6. `ANTHROPIC_DEFAULT_MODEL`.
+/// 7. The account default.
+///
+/// `project_dir` is optional because a launch from Bridge targets a chosen
+/// folder, while the Home screen has no folder in hand.
+pub fn effective_model(project_dir: Option<&Path>) -> EffectiveClaudeModel {
+    let mut overrides = Vec::new();
+
+    // 2. A shell environment variable. Read from the *process* environment, which
+    //    is what Claude Code inherits when the user launches it from a terminal.
+    if let Some(value) = std::env::var(MODEL_VAR)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+    {
+        overrides.push(ModelOverride {
+            source: "environment".into(),
+            label: "Environment variable".into(),
+            model: value,
+            path: None,
+            changeable: false,
+            hint: format!(
+                "{MODEL_VAR} is set in your environment and outranks your settings file. \
+                 Eclyzer Bridge will not change an environment variable for you. Remove it \
+                 from your shell profile, or unset it for this terminal, then launch again."
+            ),
+        });
+    }
+
+    // 3. Managed settings. Never modified, only reported.
+    for candidate in MANAGED_SETTINGS_PATHS {
+        let path = PathBuf::from(candidate);
+        if let Some(model) = model_in_settings_file(&path) {
+            overrides.push(ModelOverride {
+                source: "managed".into(),
+                label: "Organization policy".into(),
+                model,
+                path: Some(path.display().to_string()),
+                changeable: false,
+                hint: "Your organization manages this setting. Eclyzer Bridge will not change \
+                       it. Ask your administrator if it should be different."
+                    .into(),
+            });
+        }
+    }
+
+    // 4. Project and project-local settings, which reapply at every launch.
+    if let Some(dir) = project_dir {
+        for (file, source, label) in [
+            ("settings.json", "project", "Project settings"),
+            ("settings.local.json", "local", "Project local settings"),
+        ] {
+            let path = dir.join(".claude").join(file);
+            if let Some(model) = model_in_settings_file(&path) {
+                overrides.push(ModelOverride {
+                    source: source.into(),
+                    label: label.into(),
+                    model,
+                    path: Some(path.display().to_string()),
+                    changeable: true,
+                    hint: "A project settings file outranks your user settings and reapplies at \
+                           every launch. Edit that file to change the model for this project."
+                        .into(),
+                });
+            }
+        }
+    }
+
+    // 5. Bridge's own file.
+    let bridge_model = ClaudeAdapter::settings_path()
+        .ok()
+        .and_then(|path| model_in_settings_file(&path));
+
+    // 6. ANTHROPIC_DEFAULT_MODEL, used only when nothing above selected a model.
+    let default_var = std::env::var(DEFAULT_MODEL_VAR)
+        .ok()
+        .filter(|v| !v.trim().is_empty())
+        .or_else(|| {
+            ClaudeAdapter::settings_path()
+                .ok()
+                .and_then(|path| crate::config::fs::read_to_string_opt(&path).ok().flatten())
+                .and_then(|raw| {
+                    serde_json::from_str::<serde_json::Value>(&raw)
+                        .ok()
+                        .and_then(|v| {
+                            v.get("env")?
+                                .get(DEFAULT_MODEL_VAR)?
+                                .as_str()
+                                .map(str::to_string)
+                        })
+                })
+        });
+
+    if let Some(first) = overrides.first() {
+        return EffectiveClaudeModel {
+            model: Some(first.model.clone()),
+            source: first.source.clone(),
+            description: format!(
+                "{} is overriding the model Eclyzer Bridge configured ({}).",
+                first.label, first.model
+            ),
+            overrides,
+        };
+    }
+
+    match bridge_model {
+        Some(model) => EffectiveClaudeModel {
+            model: Some(model.clone()),
+            source: "bridge".into(),
+            description: format!("Eclyzer Bridge selected {model} in your user settings."),
+            overrides,
+        },
+        None => match default_var {
+            Some(model) => EffectiveClaudeModel {
+                model: Some(model.clone()),
+                source: "defaultModelVariable".into(),
+                description: format!("{DEFAULT_MODEL_VAR} selects {model}."),
+                overrides,
+            },
+            None => EffectiveClaudeModel {
+                model: None,
+                source: "account".into(),
+                description: "No model is configured, so Claude Code uses your account default."
+                    .into(),
+                overrides,
+            },
+        },
     }
 }
 
@@ -526,7 +855,6 @@ impl AgentAdapter for ClaudeAdapter {
 
         let base_url = crate::profiles::normalize_base_url(&profile.base_url);
         let wire_model = profile.wire_model().to_string();
-        let has_alias = profile.advanced.model_alias.is_some();
 
         let reason = crate::adapters::MutationReason::ActivateProfile {
             profile_id: profile.id.clone(),
@@ -542,11 +870,53 @@ impl AgentAdapter for ClaudeAdapter {
             doc.env_set(AUTH_TOKEN_VAR, secret);
             managed.push(format!("env.{AUTH_TOKEN_VAR}"));
 
-            // Only pin a model when the profile asked for one; leaving it unset
-            // lets Claude Code use its own default model.
-            if has_alias {
-                doc.env_set(MODEL_VAR, &wire_model);
+            // Select the model for new sessions by writing the `model` settings
+            // key. This is the officially supported persistent mechanism, and it
+            // is the *only* one of the available knobs that does what the user
+            // expects from "activate this profile": the documentation lists the
+            // `model` key as outranking `ANTHROPIC_DEFAULT_MODEL`, and says a
+            // model value in a settings file is what a new session starts on.
+            //
+            // The previous implementation instead wrote `ANTHROPIC_MODEL` into
+            // `env`, and only when the profile pinned a *different alias* than
+            // its model — so with no alias, activation selected no model at all
+            // and Claude Code fell back to whatever was already configured.
+            doc.set(
+                MODEL_SETTINGS_KEY,
+                serde_json::Value::String(wire_model.clone()),
+            );
+            managed.push(MODEL_SETTINGS_KEY.to_string());
+
+            // Remove `ANTHROPIC_MODEL` if an earlier Bridge version wrote it.
+            // It outranks every settings file, so leaving it would silently
+            // defeat the model selected above — this is precisely the reported
+            // bug. Only this one variable is removed here: `BASE_URL_VAR` and
+            // `AUTH_TOKEN_VAR` were just written and must survive.
+            if doc.env_remove(MODEL_VAR) {
                 managed.push(format!("env.{MODEL_VAR}"));
+            }
+            // A family alias is only removable when it is recognisably
+            // Bridge-shaped: it names the very model being activated, or it
+            // carries an Eclyzer provider prefix. A hand-written value that
+            // happens to differ is the user's, and must survive.
+            for key in FAMILY_ALIAS_VARS {
+                let Some(existing) = doc.env_get(key).map(str::to_string) else {
+                    continue;
+                };
+                if alias_is_bridge_owned(&existing, &wire_model) {
+                    doc.env_remove(key);
+                    managed.push(format!("env.{key}"));
+                }
+            }
+            // A previous Bridge version set `ANTHROPIC_DEFAULT_MODEL` to the
+            // model it activated, which the `model` key above now outranks.
+            // Leaving it would silently reappear if the user later cleared
+            // `model`, so remove it when it names this provider's model.
+            if let Some(existing) = doc.env_get(DEFAULT_MODEL_VAR).map(str::to_string) {
+                if alias_is_bridge_owned(&existing, &wire_model) {
+                    doc.env_remove(DEFAULT_MODEL_VAR);
+                    managed.push(format!("env.{DEFAULT_MODEL_VAR}"));
+                }
             }
 
             Ok(managed)
@@ -1032,7 +1402,51 @@ mod tests {
         // apply without being listed here would be left behind on restore.
         assert!(MANAGED_ENV_VARS.contains(&BASE_URL_VAR));
         assert!(MANAGED_ENV_VARS.contains(&AUTH_TOKEN_VAR));
-        assert!(MANAGED_ENV_VARS.contains(&MODEL_VAR));
+    }
+
+    #[test]
+    fn owned_env_vars_cover_everything_bridge_has_ever_written() {
+        // `OWNED_ENV_VARS` drives cleanup, and it must be a superset of what the
+        // current version writes plus what earlier versions wrote. `ANTHROPIC_MODEL`
+        // is no longer written but was, and a leftover value outranks the `model`
+        // key, so forgetting it here would silently defeat activation.
+        for key in MANAGED_ENV_VARS {
+            assert!(
+                OWNED_ENV_VARS.contains(&key),
+                "{key} is written but not cleaned up"
+            );
+        }
+        assert!(OWNED_ENV_VARS.contains(&MODEL_VAR));
+        assert!(!MANAGED_ENV_VARS.contains(&MODEL_VAR));
+    }
+
+    #[test]
+    fn activation_writes_the_model_settings_key() {
+        // The core of the fix. The `model` key is what a new session starts on,
+        // and the documentation lists it as outranking ANTHROPIC_DEFAULT_MODEL.
+        let mut doc = ClaudeJson::parse("{}").unwrap();
+        doc.set(
+            MODEL_SETTINGS_KEY,
+            serde_json::Value::String("example-model".into()),
+        );
+        let out = doc.to_string_preserving();
+        assert!(out.contains(r#""model": "example-model""#), "{out}");
+    }
+
+    #[test]
+    fn a_profile_that_pins_no_alias_still_selects_its_model() {
+        // The exact reported bug. Activation used to write ANTHROPIC_MODEL only
+        // when the profile pinned a *different* alias than its model, so a
+        // profile with no alias selected no model at all and Claude Code stayed
+        // on whatever was configured before.
+        let profile = profile_for_claude();
+        assert!(
+            profile.advanced.model_alias.is_none(),
+            "fixture must have no alias for this test to mean anything"
+        );
+        // Activation must therefore still write the model key, which is asserted
+        // end to end in `activating_a_profile_selects_its_model_for_new_sessions`.
+        assert_eq!(profile.wire_model(), "deepseek-chat");
     }
 
     // -----------------------------------------------------------------------
@@ -1128,6 +1542,11 @@ mod tests {
             "{written}"
         );
         assert!(written.contains(AUTH_TOKEN_VAR), "{written}");
+        // And the model is selected through the officially supported key.
+        assert!(
+            written.contains(r#""model": "deepseek-chat""#),
+            "the model key must be written: {written}"
+        );
 
         // The user's own settings survive, order included.
         for key in [
@@ -1170,6 +1589,535 @@ mod tests {
             written.matches("sk-claude-secret").count(),
             1,
             "the key must be written exactly once: {written}"
+        );
+    }
+
+    /// The real-world settings file that produced the reported bug.
+    ///
+    /// Copied from an actual `~/.claude/settings.json` after the user had
+    /// activated several profiles. The four `ANTHROPIC_DEFAULT_*_MODEL` values
+    /// are exactly the rows that appeared in `/model` as "Custom Opus model",
+    /// "Custom Sonnet model", and so on, and `"model": "sonnet"` is a family
+    /// alias rather than the profile's model.
+    const LEFTOVER_ALIAS_SETTINGS: &str = r#"{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://127.0.0.1:41000/v1",
+    "ANTHROPIC_AUTH_TOKEN": "",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "vendor_c/example-model",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "vendor_c/example-model-large",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "apieclyzer",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "vendor_b/vendor_b/example-model"
+  },
+  "model": "sonnet",
+  "modelSettings": {
+    "vendor_c/example-model": { "effortLevel": "xhigh" }
+  },
+  "theme": "dark",
+  "hasCompletedOnboarding": true
+}
+"#;
+
+    #[test]
+    fn activating_a_profile_selects_its_model_for_new_sessions() {
+        // The primary regression. Before the fix, this file would come back with
+        // `"model": "sonnet"` still in place and no model of the profile's
+        // anywhere, so a new Claude Code session kept running whatever was
+        // configured before.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, LEFTOVER_ALIAS_SETTINGS).unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            doc.get_str(MODEL_SETTINGS_KEY),
+            Some("deepseek-chat"),
+            "the profile's model must be the one a new session starts on"
+        );
+    }
+
+    #[test]
+    fn activating_a_profile_clears_stale_bridge_model_aliases() {
+        // Every one of these replaces a `/model` picker row, which is why the
+        // picker filled with gateway model IDs from previous activations.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, LEFTOVER_ALIAS_SETTINGS).unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        // Activating a profile whose model matches the stale aliases is the case
+        // where ownership can be proved from the activation alone.
+        let mut profile = profile_for_claude();
+        profile.model = "vendor_c/example-model".into();
+
+        adapter
+            .apply_profile(&profile, &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            doc.get_str(MODEL_SETTINGS_KEY),
+            Some("vendor_c/example-model")
+        );
+        // This alias names that same model, so it is provably Bridge's and goes.
+        assert_eq!(
+            doc.env_get("ANTHROPIC_DEFAULT_FABLE_MODEL"),
+            None,
+            "an alias naming the activated model must be cleared"
+        );
+        // These name other models. Their ownership cannot be proved from this
+        // activation, so they are left alone rather than deleted blind —
+        // deleting a user's own configuration would be worse than leaving a
+        // stale alias. `strip_managed` and the stock reset handle them.
+        for key in [
+            "ANTHROPIC_DEFAULT_OPUS_MODEL",
+            "ANTHROPIC_DEFAULT_SONNET_MODEL",
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+        ] {
+            assert!(
+                doc.env_get(key).is_some(),
+                "{key} does not name the activated model, so it is not ours to delete"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stale_alias_is_cleared_when_it_carries_a_bridge_provider_prefix() {
+        // The second ownership signal: an alias whose value starts with Bridge's
+        // own provider prefix was written by Bridge, whatever model it names.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(
+            &settings,
+            r#"{ "env": { "ANTHROPIC_DEFAULT_OPUS_MODEL": "eclyzer_bridge_old_provider_model" } }"#,
+        )
+        .unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            doc.env_get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            None,
+            "a Bridge-prefixed alias is ours to remove"
+        );
+    }
+
+    #[test]
+    fn a_family_alias_with_a_context_suffix_is_still_recognised() {
+        // Claude Code accepts a `[1m]` suffix on these variables and treats the
+        // rest as the model ID, so ownership must see through it.
+        assert!(alias_is_bridge_owned("m[1m]", "m"));
+        assert!(alias_is_bridge_owned("m", "m[1m]"));
+        assert!(
+            alias_is_bridge_owned("M", "m"),
+            "comparison is case-insensitive"
+        );
+        assert!(!alias_is_bridge_owned("other", "m"));
+        assert!(!alias_is_bridge_owned("", "m"));
+    }
+
+    #[test]
+    fn ownership_is_not_claimed_for_an_empty_or_unrelated_value() {
+        assert!(!alias_is_bridge_owned("   ", "model"));
+        assert!(!alias_is_bridge_owned("example-alias", "deepseek-chat"));
+    }
+
+    #[test]
+    fn activating_a_profile_never_deletes_a_users_own_model_choice() {
+        // Ownership must be proved, not assumed. A model the user set for
+        // themselves, naming something Bridge never wrote, must survive.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(
+            &settings,
+            r#"{
+  "env": { "ANTHROPIC_DEFAULT_OPUS_MODEL": "my-own-opus-deployment" },
+  "model": "my-hand-picked-model"
+}
+"#,
+        )
+        .unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        // The user's alias survives: it does not name Bridge's model.
+        assert_eq!(
+            doc.env_get("ANTHROPIC_DEFAULT_OPUS_MODEL"),
+            Some("my-own-opus-deployment")
+        );
+        // The model key is Bridge's now, because activation's whole purpose is
+        // to select the activated model; the previous value is in the snapshot
+        // and in the immutable original, both of which are asserted elsewhere.
+        assert_eq!(doc.get_str(MODEL_SETTINGS_KEY), Some("deepseek-chat"));
+    }
+
+    #[test]
+    fn switching_profiles_replaces_the_previously_selected_model() {
+        // Activate A, then B. B's model must win, and none of A's model settings
+        // may remain able to override it.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, "{}\n").unwrap();
+        let adapter = ClaudeAdapter::new(backups);
+
+        let mut first = profile_for_claude();
+        first.model = "model-a".into();
+        adapter
+            .apply_profile(&first, &options(Some("sk-a")))
+            .expect("first apply");
+        assert_eq!(
+            ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap())
+                .unwrap()
+                .get_str(MODEL_SETTINGS_KEY),
+            Some("model-a")
+        );
+
+        let mut second = profile_for_claude();
+        second.model = "model-b".into();
+        adapter
+            .apply_profile(&second, &options(Some("sk-b")))
+            .expect("second apply");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            doc.get_str(MODEL_SETTINGS_KEY),
+            Some("model-b"),
+            "the second profile's model must win"
+        );
+        // Nothing anywhere in the file may still select model-a.
+        let written = std::fs::read_to_string(&settings).unwrap();
+        assert!(
+            !written.contains("model-a"),
+            "a stale model selection survived the switch: {written}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // Effective-model reporting.
+    //
+    // These use the same process-wide environment lock as the adapter tests,
+    // because `ANTHROPIC_MODEL` is read from the process environment.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn no_configuration_reports_the_account_default() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, _settings) = scratch();
+        // Remove the variable so the test does not depend on the machine.
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::remove_var(MODEL_VAR) };
+
+        let report = effective_model(None);
+        assert_eq!(report.source, "account");
+        assert_eq!(report.model, None);
+        assert!(report.overrides.is_empty());
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var(MODEL_VAR, value) };
+        }
+    }
+
+    #[test]
+    fn the_users_settings_file_is_reported_as_bridges_source() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::remove_var(MODEL_VAR) };
+        std::fs::write(&settings, r#"{ "model": "example-model" }"#).unwrap();
+
+        let report = effective_model(None);
+        assert_eq!(report.source, "bridge");
+        assert_eq!(report.model.as_deref(), Some("example-model"));
+        assert!(report.description.contains("example-model"));
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var(MODEL_VAR, value) };
+        }
+    }
+
+    #[test]
+    fn an_environment_override_is_detected_and_reported_as_unchangeable() {
+        // The case the task requires: a shell variable outranks Bridge, so the
+        // app must not claim activation succeeded.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+        std::fs::write(&settings, r#"{ "model": "bridge-model" }"#).unwrap();
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::set_var(MODEL_VAR, "shell-model") };
+
+        let report = effective_model(None);
+
+        assert_eq!(report.source, "environment");
+        assert_eq!(report.model.as_deref(), Some("shell-model"));
+        let conflict = report
+            .overrides
+            .iter()
+            .find(|o| o.source == "environment")
+            .expect("the environment conflict must be reported");
+        assert!(
+            !conflict.changeable,
+            "Bridge must not edit the user's shell"
+        );
+        assert!(conflict.hint.contains(MODEL_VAR));
+        // And the description must name what is winning, not claim success.
+        assert!(report.description.contains("shell-model"));
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var(MODEL_VAR, value) },
+            None => unsafe { std::env::remove_var(MODEL_VAR) },
+        }
+    }
+
+    #[test]
+    fn a_project_settings_override_is_detected_and_reported_as_changeable() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (scratch_dir, _backups, settings) = scratch();
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::remove_var(MODEL_VAR) };
+        std::fs::write(&settings, r#"{ "model": "bridge-model" }"#).unwrap();
+
+        // A project the user launches from, with its own settings file.
+        let project = scratch_dir._dir.path().join("project");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::write(
+            project.join(".claude").join("settings.json"),
+            r#"{ "model": "project-model" }"#,
+        )
+        .unwrap();
+
+        let report = effective_model(Some(&project));
+
+        assert_eq!(report.source, "project");
+        assert_eq!(report.model.as_deref(), Some("project-model"));
+        let conflict = report
+            .overrides
+            .iter()
+            .find(|o| o.source == "project")
+            .expect("the project conflict must be reported");
+        assert!(
+            conflict.changeable,
+            "the user can edit their own project file"
+        );
+        assert!(conflict.path.is_some(), "the file must be named");
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var(MODEL_VAR, value) };
+        }
+    }
+
+    #[test]
+    fn project_local_settings_are_detected_too() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (scratch_dir, _backups, settings) = scratch();
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::remove_var(MODEL_VAR) };
+        std::fs::write(&settings, r#"{ "model": "bridge-model" }"#).unwrap();
+
+        let project = scratch_dir._dir.path().join("project");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        std::fs::write(
+            project.join(".claude").join("settings.local.json"),
+            r#"{ "model": "local-model" }"#,
+        )
+        .unwrap();
+
+        let report = effective_model(Some(&project));
+        assert_eq!(report.source, "local");
+        assert_eq!(report.model.as_deref(), Some("local-model"));
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var(MODEL_VAR, value) };
+        }
+    }
+
+    #[test]
+    fn a_project_without_a_model_does_not_report_a_conflict() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (scratch_dir, _backups, settings) = scratch();
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::remove_var(MODEL_VAR) };
+        std::fs::write(&settings, r#"{ "model": "bridge-model" }"#).unwrap();
+
+        let project = scratch_dir._dir.path().join("project");
+        std::fs::create_dir_all(project.join(".claude")).unwrap();
+        // A project file that sets something else entirely.
+        std::fs::write(
+            project.join(".claude").join("settings.json"),
+            r#"{ "theme": "dark" }"#,
+        )
+        .unwrap();
+
+        let report = effective_model(Some(&project));
+        assert_eq!(report.source, "bridge");
+        assert!(report.overrides.is_empty());
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var(MODEL_VAR, value) };
+        }
+    }
+
+    #[test]
+    fn a_default_model_variable_is_reported_when_nothing_else_selects_one() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+        let previous = std::env::var_os(MODEL_VAR);
+        let previous_default = std::env::var_os(DEFAULT_MODEL_VAR);
+        unsafe { std::env::remove_var(MODEL_VAR) };
+        unsafe { std::env::remove_var(DEFAULT_MODEL_VAR) };
+        std::fs::write(
+            &settings,
+            r#"{ "env": { "ANTHROPIC_DEFAULT_MODEL": "from-variable" } }"#,
+        )
+        .unwrap();
+
+        let report = effective_model(None);
+        assert_eq!(report.source, "defaultModelVariable");
+        assert_eq!(report.model.as_deref(), Some("from-variable"));
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var(MODEL_VAR, value) };
+        }
+        if let Some(value) = previous_default {
+            unsafe { std::env::set_var(DEFAULT_MODEL_VAR, value) };
+        }
+    }
+
+    #[test]
+    fn a_missing_settings_file_is_not_an_error_for_the_report() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::remove_var(MODEL_VAR) };
+        assert!(!settings.exists());
+
+        let report = effective_model(None);
+        assert_eq!(report.source, "account");
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var(MODEL_VAR, value) };
+        }
+    }
+
+    #[test]
+    fn an_unparsable_settings_file_does_not_panic_the_report() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::remove_var(MODEL_VAR) };
+        std::fs::write(&settings, "{ this is not json").unwrap();
+
+        // Reporting must degrade rather than fail: the user still needs to know
+        // that no model is configured.
+        let report = effective_model(None);
+        assert_eq!(report.source, "account");
+
+        if let Some(value) = previous {
+            unsafe { std::env::set_var(MODEL_VAR, value) };
+        }
+    }
+
+    #[test]
+    fn a_blank_environment_variable_is_ignored() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+        let previous = std::env::var_os(MODEL_VAR);
+        unsafe { std::env::set_var(MODEL_VAR, "   ") };
+        std::fs::write(&settings, r#"{ "model": "bridge-model" }"#).unwrap();
+
+        let report = effective_model(None);
+        assert_eq!(
+            report.source, "bridge",
+            "whitespace is not a model selection"
+        );
+
+        match previous {
+            Some(value) => unsafe { std::env::set_var(MODEL_VAR, value) },
+            None => unsafe { std::env::remove_var(MODEL_VAR) },
+        }
+    }
+
+    #[test]
+    fn activation_removes_a_legacy_anthropic_model_variable() {
+        // Earlier Bridge versions wrote ANTHROPIC_MODEL, which outranks the
+        // `model` key. If it were left behind, the key written by activation
+        // would be silently ignored.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(
+            &settings,
+            r#"{ "env": { "ANTHROPIC_MODEL": "an-old-bridge-model" } }"#,
+        )
+        .unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            doc.env_get(MODEL_VAR),
+            None,
+            "ANTHROPIC_MODEL would override the model key"
+        );
+        assert_eq!(doc.get_str(MODEL_SETTINGS_KEY), Some("deepseek-chat"));
+    }
+
+    #[test]
+    fn activation_preserves_unrelated_settings_in_the_leftover_fixture() {
+        // PRD §17: everything not owned by Bridge survives, including a
+        // `modelSettings` block and a theme.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, LEFTOVER_ALIAS_SETTINGS).unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let written = std::fs::read_to_string(&settings).unwrap();
+        assert!(written.contains("modelSettings"), "{written}");
+        assert!(written.contains("effortLevel"), "{written}");
+        assert!(written.contains("\"theme\": \"dark\""), "{written}");
+        assert!(written.contains("hasCompletedOnboarding"), "{written}");
+    }
+
+    #[test]
+    fn the_model_key_is_selected_even_when_the_profile_has_no_alias() {
+        // The precise defect: activation used to write ANTHROPIC_MODEL only when
+        // the profile pinned an alias different from its model, so a profile
+        // with no alias selected no model at all.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, "{}\n").unwrap();
+
+        let mut profile = profile_for_claude();
+        assert!(profile.advanced.model_alias.is_none());
+        profile.model = "no-alias-model".into();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile, &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        assert_eq!(
+            ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap())
+                .unwrap()
+                .get_str(MODEL_SETTINGS_KEY),
+            Some("no-alias-model")
         );
     }
 
