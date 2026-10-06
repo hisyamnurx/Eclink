@@ -3,14 +3,33 @@
 //! Every string that can reach a log file, a diagnostics bundle, or the UI
 //! passes through this module. Redaction is:
 //!
-//! * **fail-safe** — unknown-shaped secrets are masked rather than leaked;
-//! * **idempotent** — redacting twice equals redacting once, so layered call
-//!   sites are safe;
+//! * **layered** — applied when a line is written, again when logs are read
+//!   back, and again when a diagnostics report is assembled, so a single missed
+//!   call site does not leak;
+//! * **idempotent** — redacting twice equals redacting once, which is what makes
+//!   those layers safe to stack;
 //! * **context-aware** — it recognises header lines, query parameters, common
-//!   key prefixes, and long opaque tokens.
+//!   key prefixes, JSON Web Tokens, and long opaque tokens.
 //!
 //! It deliberately never logs the full value: callers get `****abcd` style
 //! fingerprints via [`fingerprint`].
+//!
+//! ## What this module does *not* guarantee
+//!
+//! This is pattern matching, not a guarantee. A secret whose shape matches none
+//! of the rules below survives redaction. Known gaps, stated plainly so nobody
+//! relies on more than is delivered:
+//!
+//! * a short, unprefixed secret assigned to a field whose name does not look
+//!   sensitive (for example `{"session":"abc123"}`) is not detected;
+//! * a secret split across lines, or pasted with no separator into surrounding
+//!   text, may fall outside a rule's boundaries.
+//!
+//! In practice the secrets this application handles are provider API keys, which
+//! the [`known_key_prefix`](Patterns) rule and the header rules do cover. The
+//! defence that matters more is structural: [`Secret`](crate::testing::Secret)
+//! cannot be logged or serialized at all, so a key never reaches this module
+//! through the normal path in the first place.
 
 use std::sync::OnceLock;
 
@@ -38,6 +57,12 @@ struct Patterns {
     secret_assignment: Regex,
     /// Well-known provider key prefixes without surrounding context.
     known_key_prefix: Regex,
+    /// A JSON Web Token: three base64url segments separated by dots.
+    ///
+    /// Without this rule a JWT escapes both the prefix rule (its first segment
+    /// begins `eyJ`, not `sk-`) and the long-token rule (that rule's character
+    /// class excludes `.`, so a dotted string never occupies a single token).
+    json_web_token: Regex,
     /// A long unbroken base64/hex run that looks like an opaque credential.
     long_opaque_token: Regex,
     /// URL userinfo credentials: `scheme://user:pass@host`
@@ -88,6 +113,13 @@ impl Patterns {
                 r"\b(?:sk|rk|pk|gsk|xai|fw|hf|api|key|tok|pat|ghp|gho|github_pat|glpat|SG|AKIA)[-_][A-Za-z0-9_\-]{12,}",
             )
             .expect("known_key_prefix regex"),
+            // A JWT. Each segment is base64url; the header segment of a real JWT
+            // always starts `eyJ`, so requiring that keeps false positives down
+            // while still matching tokens with an unusually short payload.
+            json_web_token: Regex::new(
+                r"\beyJ[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{4,}",
+            )
+            .expect("json_web_token regex"),
             // A long unbroken base64/hex run that looks like an opaque
             // credential. The run must occupy a whole whitespace-delimited
             // token, so redaction never swallows an unrelated `&param=value`, a
@@ -160,6 +192,10 @@ pub fn redact_text(input: &str) -> String {
         .into_owned();
 
     out = p.known_key_prefix.replace_all(&out, REDACTED).into_owned();
+
+    // JWTs carry dots, so the long-token rule below cannot see them. Run this
+    // before that rule so a JWT is replaced whole rather than in fragments.
+    out = p.json_web_token.replace_all(&out, REDACTED).into_owned();
 
     out = p
         .long_opaque_token
@@ -316,5 +352,53 @@ mod tests {
         // diagnostics stay useful.
         let out = redact_text("model: deepseek-chat-v3-0324-preview");
         assert!(out.contains("deepseek-chat-v3-0324-preview"), "{out}");
+    }
+
+    #[test]
+    fn redacts_a_json_web_token() {
+        // A JWT previously escaped both rules: its header segment starts `eyJ`
+        // rather than a provider prefix, and the long-token rule's character
+        // class excludes `.`, so a dotted token never occupies a whole token.
+        let jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\
+                   .eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0\
+                   .SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+        let out = redact_text(&format!("auth failed for token {jwt}"));
+        assert!(
+            !out.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"),
+            "{out}"
+        );
+        assert!(!out.contains("SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV"), "{out}");
+        assert!(out.contains("[REDACTED]"), "{out}");
+    }
+
+    #[test]
+    fn redacts_a_jwt_in_a_header_value() {
+        // The overlapping header rule and JWT rule must not leave a fragment.
+        let out = redact_text(
+            "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        );
+        assert!(!out.contains("dBjftJeZ4CVPmB92K27uhbUJU1p1r"), "{out}");
+    }
+
+    #[test]
+    fn a_jwt_shaped_token_is_redacted_repeatedly_without_growing() {
+        let jwt =
+            "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhYmMifQ.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+        let once = redact_text(&format!("token={jwt}"));
+        let twice = redact_text(&once);
+        assert_eq!(once, twice, "redaction must stay idempotent for a JWT");
+    }
+
+    #[test]
+    fn the_documented_gap_is_really_a_gap() {
+        // This test exists to keep the module documentation honest. If a future
+        // change makes short unprefixed values detectable, this test fails and
+        // whoever made the change should update the "what this module does not
+        // guarantee" section rather than delete the test.
+        let out = redact_text(r#"{"session":"abc123"}"#);
+        assert!(
+            out.contains("abc123"),
+            "the documented limitation no longer holds; update the module docs"
+        );
     }
 }

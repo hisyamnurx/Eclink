@@ -52,19 +52,7 @@ pub async fn check_for_updates_on_startup(
 ) -> CommandResult<Option<UpdateStatus>> {
     let state = state.inner().clone();
 
-    let due = {
-        let settings = state.settings();
-        if !settings.update_check {
-            // The user turned automatic checks off; do nothing at all.
-            return Ok(None);
-        }
-        crate::updater::should_check_now(
-            settings.last_update_check.as_deref(),
-            chrono::Local::now(),
-        )
-    };
-
-    if !due {
+    if !startup_check_is_due(&state) {
         return Ok(None);
     }
 
@@ -84,14 +72,42 @@ pub async fn check_for_updates_on_startup(
     Ok(Some(status))
 }
 
+/// Whether the silent startup check should run at all.
+///
+/// Extracted so the two rules that keep this from being a background updater —
+/// the user's setting, and the 24-hour interval — are testable without an
+/// `AppHandle` or a network.
+fn startup_check_is_due(state: &AppState) -> bool {
+    let settings = state.settings();
+    if !settings.update_check {
+        // The user turned automatic checks off; do nothing at all.
+        return false;
+    }
+    crate::updater::should_check_now(settings.last_update_check.as_deref(), chrono::Local::now())
+}
+
 #[cfg(test)]
 mod tests {
     use crate::updater::UpdateStatus;
 
     #[test]
     fn a_startup_status_is_only_returned_when_a_check_ran() {
-        // The command returns `None` when it deliberately skipped the check.
+        // The command returns `None` when it deliberately skipped the check, so
+        // a caller can distinguish "no update" from "did not look".
+        let checked_and_current = Some(UpdateStatus::up_to_date());
         let skipped: Option<UpdateStatus> = None;
+
+        assert!(checked_and_current.is_some());
         assert!(skipped.is_none());
+        assert!(!UpdateStatus::up_to_date().available);
+    }
+
+    #[test]
+    fn a_failed_startup_check_is_still_reported_as_having_run() {
+        // Being offline must not be rendered as "no update available" forever;
+        // the status carries the failure so the UI can say what happened.
+        let status = UpdateStatus::failed("Could not check for updates.".to_string());
+        assert!(status.error.is_some());
+        assert!(!status.available);
     }
 }

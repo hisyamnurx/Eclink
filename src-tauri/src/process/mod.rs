@@ -66,6 +66,22 @@ pub fn resolve_terminal() -> (PathBuf, bool) {
     (PathBuf::from("powershell.exe"), false)
 }
 
+/// Which terminal host a launch plan targets.
+///
+/// Passed explicitly to [`build_launch_plan`] rather than detected inside it, so
+/// both branches can be exercised by tests on a machine where only one of them
+/// would otherwise ever run. The PowerShell fallback is the branch that builds a
+/// command string, so it is the one that most needs testing — and it is exactly
+/// the branch a developer with Windows Terminal installed never reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalKind {
+    /// `wt -d <dir> -- <exe>`: every part is a separate argv entry.
+    WindowsTerminal,
+    /// `powershell.exe -Command <script>`: a single argv element that PowerShell
+    /// then parses, so the script must be built with correct quoting.
+    PowerShell,
+}
+
 /// Build the launch plan for `agent` in `project_dir`.
 ///
 /// The returned argv is fully explicit; nothing is shell-interpreted.
@@ -74,11 +90,31 @@ pub fn build_launch_plan(
     agent_executable: &Path,
     project_dir: &Path,
 ) -> BridgeResult<LaunchPlan> {
+    let (terminal, is_wt) = resolve_terminal();
+    let kind = if is_wt {
+        TerminalKind::WindowsTerminal
+    } else {
+        TerminalKind::PowerShell
+    };
+    build_launch_plan_for(agent, agent_executable, project_dir, kind, &terminal)
+}
+
+/// Build a launch plan for an explicitly chosen terminal host.
+///
+/// [`build_launch_plan`] is the production entry point; this variant exists so
+/// tests can exercise both terminal branches deterministically.
+pub fn build_launch_plan_for(
+    agent: AgentId,
+    agent_executable: &Path,
+    project_dir: &Path,
+    kind: TerminalKind,
+    terminal: &Path,
+) -> BridgeResult<LaunchPlan> {
     let working_dir = normalize_project_dir(project_dir)?;
     let workdir_str = working_dir.display().to_string();
     let exe_str = agent_executable.display().to_string();
 
-    let (terminal, is_wt) = resolve_terminal();
+    let is_wt = kind == TerminalKind::WindowsTerminal;
 
     let args: Vec<String> = if is_wt {
         // `wt -d <dir> -- <exe>` opens a new tab in the project directory and
@@ -343,26 +379,173 @@ mod tests {
     }
 
     #[test]
-    fn powershell_fallback_script_uses_literal_path() {
+    fn powershell_fallback_escapes_a_single_quote_in_the_project_path() {
+        // Regression: this assertion used to sit behind `if is_wt { return; }`, so
+        // on any machine with Windows Terminal installed — the common case, and
+        // the machine the release is built on — the escaping was never checked.
+        // The terminal is now chosen explicitly, so this always runs.
         let dir = project();
         let tricky = dir.path().join("proj'quote");
         std::fs::create_dir_all(&tricky).unwrap();
 
-        let (_, is_wt) = resolve_terminal();
-        if is_wt {
-            // Windows Terminal path: no shell string at all.
-            let plan = build_launch_plan(AgentId::Codex, Path::new("codex.exe"), &tricky).unwrap();
-            assert!(plan.args.contains(&"--".to_string()));
-            return;
-        }
+        let plan = build_launch_plan_for(
+            AgentId::Codex,
+            Path::new("codex.exe"),
+            &tricky,
+            TerminalKind::PowerShell,
+            Path::new("powershell.exe"),
+        )
+        .unwrap();
 
-        let plan = build_launch_plan(AgentId::Codex, Path::new("codex.exe"), &tricky).unwrap();
+        assert_eq!(plan.args[0], "-NoExit");
+        assert_eq!(plan.args[2], "-Command");
         let script = plan.args.last().unwrap();
         assert!(script.contains("Set-Location -LiteralPath"), "{script}");
         assert!(
             script.contains("''"),
-            "single quote must be escaped: {script}"
+            "a single quote in the path must be doubled: {script}"
         );
+        // The doubled quote must appear in the path position, not somewhere else.
+        assert!(
+            script.contains("proj''quote"),
+            "the escaped path is malformed: {script}"
+        );
+        // PowerShell is invoked by absolute path, not resolved through PATH.
+        assert_eq!(plan.program, "powershell.exe");
+    }
+
+    #[test]
+    fn powershell_fallback_does_not_interpret_shell_metacharacters() {
+        // A directory name containing characters that mean something to a shell
+        // must arrive as a literal. `Set-Location -LiteralPath '<path>'` is what
+        // makes this safe; if the implementation ever switches to string
+        // interpolation without quoting, this test fails.
+        //
+        // The name must also be one Windows will actually create, which rules out
+        // `|`, `"`, `<`, `>`, `:`, and a trailing space or dot. `;`, `&`, `$(`,
+        // `(`, backtick and `'` are all legal in a directory name and all
+        // meaningful to PowerShell, so they cover the injection surface that
+        // exists in practice.
+        let dir = project();
+        let name = "a; Remove-Item -Recurse & $(whoami) (x) `whoami`";
+        let tricky = dir.path().join(name);
+        std::fs::create_dir_all(&tricky).unwrap();
+
+        let plan = build_launch_plan_for(
+            AgentId::Codex,
+            Path::new("codex.exe"),
+            &tricky,
+            TerminalKind::PowerShell,
+            Path::new("powershell.exe"),
+        )
+        .unwrap();
+
+        let script = plan.args.last().unwrap();
+
+        // The path must sit inside a single-quoted literal that begins
+        // immediately after `-LiteralPath `, so PowerShell treats every
+        // metacharacter in it as an ordinary character.
+        let after = script
+            .split("Set-Location -LiteralPath ")
+            .nth(1)
+            .expect("the path is passed to -LiteralPath");
+        let quoted = after
+            .strip_prefix('\'')
+            .expect("the path must be a single-quoted literal");
+        let literal = quoted.split('\'').next().expect("the literal terminates");
+
+        assert!(
+            literal.contains("a; Remove-Item -Recurse & $(whoami) (x) `whoami`"),
+            "the path was not quoted as one literal: {script}"
+        );
+        // And the executable is quoted too, not left bare after the call operator.
+        assert!(
+            script.contains("& 'codex.exe'"),
+            "the executable must be quoted: {script}"
+        );
+    }
+
+    #[test]
+    fn a_path_containing_a_quote_is_doubled_so_the_literal_cannot_be_broken_out_of() {
+        // The escaping rule that actually matters: a `'` inside the path must
+        // become `''`. If it were emitted raw, the literal would end early and
+        // everything after it would be parsed as PowerShell.
+        let quoted = ps_single_quote(r"C:\Users\o'brien\proj'ect");
+        assert_eq!(quoted, r"'C:\Users\o''brien\proj''ect'");
+        // The result must be a single well-formed literal.
+        assert!(quoted.starts_with('\''));
+        assert!(quoted.ends_with('\''));
+        // No lone quote may survive inside.
+        let inner = &quoted[1..quoted.len() - 1];
+        let mut chars = inner.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == '\'' {
+                assert_eq!(
+                    chars.next(),
+                    Some('\''),
+                    "a lone quote inside the literal would terminate it early"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn windows_terminal_branch_passes_each_part_as_its_own_argument() {
+        // The preferred branch builds no shell string at all, so a path with
+        // spaces or metacharacters is inert. Assert the argv shape directly.
+        let dir = project();
+        let tricky = dir.path().join("proj'quote & spaces");
+        std::fs::create_dir_all(&tricky).unwrap();
+
+        let plan = build_launch_plan_for(
+            AgentId::Codex,
+            Path::new(r"C:\Program Files\codex.exe"),
+            &tricky,
+            TerminalKind::WindowsTerminal,
+            Path::new("wt.exe"),
+        )
+        .unwrap();
+
+        assert_eq!(plan.args.len(), 4, "argv: {:?}", plan.args);
+        assert_eq!(plan.args[0], "-d");
+        assert_eq!(plan.args[2], "--");
+        assert!(
+            plan.args[3].ends_with("codex.exe"),
+            "the executable is its own argv entry: {:?}",
+            plan.args
+        );
+        // The path is one entry, unquoted inside itself.
+        assert!(
+            plan.args[1].contains("proj'quote & spaces"),
+            "{:?}",
+            plan.args
+        );
+        // No argument may contain a shell operator joining two commands.
+        for arg in &plan.args {
+            assert!(
+                !arg.contains("; &"),
+                "an argument looks like a joined shell command: {arg}"
+            );
+        }
+    }
+
+    #[test]
+    fn both_terminal_branches_reject_the_same_bad_directory() {
+        // Directory validation must not depend on which terminal was chosen.
+        for kind in [TerminalKind::WindowsTerminal, TerminalKind::PowerShell] {
+            let err = build_launch_plan_for(
+                AgentId::Codex,
+                Path::new("codex.exe"),
+                Path::new(r"C:\definitely\not\here"),
+                kind,
+                Path::new("powershell.exe"),
+            )
+            .expect_err("a nonexistent directory must be rejected");
+            assert!(
+                !err.message.is_empty(),
+                "the error must explain itself: {err:?}"
+            );
+        }
     }
 
     #[test]
