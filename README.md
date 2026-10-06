@@ -1,3 +1,5 @@
+<img src="0-Docs/logo.png" alt="Eclyzer Bridge" width="120" align="right" />
+
 # Eclyzer Bridge
 
 > **Documentation lives in [`0-Docs/`](0-Docs/) — start with

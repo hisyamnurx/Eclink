@@ -94,8 +94,18 @@ function Shell() {
     <div className="app">
       <nav className="sidebar" aria-label="Main">
         <div className="sidebar__brand">
-          <div className="sidebar__wordmark">Eclyzer Bridge</div>
-          <div className="sidebar__tagline">Local configuration bridge</div>
+          <img
+            className="sidebar__logo"
+            src="/logo-mark.png"
+            alt=""
+            aria-hidden="true"
+            width={36}
+            height={36}
+          />
+          <div>
+            <div className="sidebar__wordmark">Eclyzer Bridge</div>
+            <div className="sidebar__tagline">Local configuration bridge</div>
+          </div>
         </div>
 
         <div className="nav">

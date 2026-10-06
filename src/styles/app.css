@@ -136,7 +136,20 @@ code,
 }
 
 .sidebar__brand {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   padding: var(--space-2) var(--space-3) var(--space-4);
+}
+
+/* The mark is the same artwork as the application icon, so the sidebar and the
+   taskbar show the same thing. It has a transparent background, which the app's
+   dark surface already provides. */
+.sidebar__logo {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  object-fit: contain;
 }
 
 .sidebar__wordmark {

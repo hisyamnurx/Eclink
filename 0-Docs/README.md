@@ -1,3 +1,5 @@
+<img src="logo.png" alt="Eclyzer Bridge" width="120" align="right" />
+
 # Eclyzer Bridge
 
 A lightweight provider and profile manager for AI coding agents on Windows.
