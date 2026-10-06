@@ -1,0 +1,8 @@
+[env]
+# Keep cargo output readable and disable incremental artefacts in CI.
+CARGO_TERM_COLOR = "always"
+
+[alias]
+# Convenience aliases mirroring the npm scripts.
+lint = "clippy --workspace --all-targets -- -D warnings"
+fmtcheck = "fmt --all -- --check"

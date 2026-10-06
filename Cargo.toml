@@ -1,0 +1,55 @@
+[workspace]
+members = ["src-tauri", "helper"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+license = "MIT"
+repository = "https://github.com/hisyamnurx/Eclyzer-Bridge"
+authors = ["Eclyzer Bridge contributors"]
+description = "Lightweight provider and profile manager for AI coding agents."
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+sha2 = "0.10"
+base64 = "0.22"
+toml_edit = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "fmt", "chrono"] }
+tracing-appender = "0.2"
+directories = "6"
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "stream",
+    "rustls-tls-native-roots",
+    "http2",
+    "charset",
+] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "sync", "time", "fs", "io-util"] }
+futures-util = "0.3"
+regex = "1"
+url = "2"
+tempfile = "3"
+
+# Windows-only
+windows = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Security_Cryptography",
+    "Win32_Security_Credentials",
+    "Win32_System_Memory",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
