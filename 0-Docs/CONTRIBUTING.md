@@ -211,4 +211,4 @@ Follow [SECURITY.md](SECURITY.md) instead.
 ## License
 
 By contributing, you agree that your contributions are licensed under the
-[MIT License](LICENSE), the same terms as the project.
+[MIT License](../LICENSE), the same terms as the project.

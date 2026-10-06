@@ -9,4 +9,7 @@ src-tauri/gen
 
 # Third-party authored document. It is the product source of truth and must stay
 # byte-identical to what the project owner wrote.
-Eclyzer-Bridge-PRD-v0.1.md
+0-Docs/PRD/Eclyzer-Bridge-PRD-v0.1.md
+
+# Built installer artifacts; not source.
+0-Installer
