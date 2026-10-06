@@ -293,13 +293,24 @@ impl CodexToml {
     }
 
     /// Serialise back to text, preserving the original newline style.
+    ///
+    /// `toml_edit` keeps comments, key order, and whitespace, but it always
+    /// emits `\n`. A file that was read with CRLF endings is therefore converted
+    /// back here, so activating a profile does not change a Windows user's line
+    /// endings underneath them.
     pub fn to_string_preserving(&self) -> String {
-        let rendered = self.doc.to_string();
-        if self.had_trailing_newline && !rendered.ends_with('\n') {
-            format!("{rendered}\n")
-        } else {
-            rendered
+        let mut rendered = self.doc.to_string();
+
+        if self.newline == "\r\n" {
+            // Normalise first so an already-mixed file does not end up with
+            // doubled carriage returns.
+            rendered = rendered.replace("\r\n", "\n").replace('\n', "\r\n");
         }
+
+        if self.had_trailing_newline && !rendered.ends_with('\n') {
+            rendered.push_str(&self.newline);
+        }
+        rendered
     }
 }
 
@@ -416,6 +427,90 @@ wire_api = "responses"
     }
 
     #[test]
+    fn key_order_and_comments_survive_together() {
+        // The Codex counterpart of the Claude order test. `toml_edit` preserves
+        // both, but only while it is actually used; a refactor to a plain
+        // `toml::Value` round-trip would sort keys and drop every comment, and
+        // this test is what would notice.
+        let user_config = "\
+# my own notes, first line
+zebra = 1
+apple = 2
+# a comment in the middle
+model = \"old-model\"
+middle = 3
+
+[model_providers.my_gateway]
+# our internal gateway
+name = \"My Gateway\"
+base_url = \"https://gw.example.com/v1\"
+zz_last = true
+";
+
+        let mut doc = CodexToml::parse(user_config).unwrap();
+        doc.set_str("model", "deepseek-chat");
+        let out = doc.to_string_preserving();
+
+        // Order is preserved exactly as the user wrote it.
+        let order = ["zebra", "apple", "model", "middle"];
+        let mut last = 0usize;
+        for key in order {
+            let at = out
+                .find(&format!("{key} ="))
+                .unwrap_or_else(|| panic!("lost {key}: {out}"));
+            assert!(at >= last, "key order changed for {key}: {out}");
+            last = at;
+        }
+
+        // Every comment survives, including the one inside a table.
+        for comment in [
+            "# my own notes, first line",
+            "# a comment in the middle",
+            "# our internal gateway",
+        ] {
+            assert!(out.contains(comment), "lost {comment}: {out}");
+        }
+
+        // The user's own provider table is untouched, order included.
+        assert!(out.contains("[model_providers.my_gateway]"), "{out}");
+        assert!(out.contains("zz_last = true"), "{out}");
+    }
+
+    #[test]
+    fn a_comment_attached_to_a_bridge_owned_key_is_not_orphaned_into_the_file() {
+        // Setting a managed key that the user had commented must not duplicate
+        // or detach the comment.
+        let user_config = "\
+# keep this comment
+model = \"old\"
+";
+        let mut doc = CodexToml::parse(user_config).unwrap();
+        doc.set_str("model", "new-model");
+        let out = doc.to_string_preserving();
+
+        assert!(out.contains("# keep this comment"), "{out}");
+        assert!(out.contains("model = \"new-model\""), "{out}");
+        // The comment must not be duplicated by the rewrite.
+        assert_eq!(
+            out.matches("# keep this comment").count(),
+            1,
+            "the comment was duplicated: {out}"
+        );
+    }
+
+    #[test]
+    fn toml_line_endings_are_preserved() {
+        let mut doc = CodexToml::parse("zebra = 1\r\nmodel = \"old\"\r\n").unwrap();
+        doc.set_str("model", "new");
+        let out = doc.to_string_preserving();
+        assert!(out.contains("\r\n"), "CRLF was lost: {out:?}");
+        assert!(
+            !out.replace("\r\n", "").contains('\n'),
+            "mixed line endings: {out:?}"
+        );
+    }
+
+    #[test]
     fn unrelated_providers_survive() {
         let mut doc = CodexToml::parse(NORMAL).unwrap();
         doc.upsert_provider("eclyzer_bridge_deepseek_abcd1234", &spec());
@@ -444,11 +539,39 @@ wire_api = "responses"
 
     #[test]
     fn crlf_is_preserved() {
+        // The earlier version of this test only asserted `ends_with('\n')`,
+        // which a bare LF also satisfies — so it passed while CRLF was being
+        // converted to LF on every write. Assert the terminator itself.
         let crlf = "# c\r\nmodel = \"gpt-5\"\r\n";
         let mut doc = CodexToml::parse(crlf).unwrap();
         assert_eq!(doc.newline(), "\r\n");
         doc.set_str("model", "x");
-        assert!(doc.to_string_preserving().ends_with('\n'));
+
+        let out = doc.to_string_preserving();
+        assert!(out.contains("\r\n"), "CRLF was lost: {out:?}");
+        assert!(
+            !out.replace("\r\n", "").contains('\n'),
+            "mixed line endings: {out:?}"
+        );
+        assert!(out.ends_with("\r\n"), "wrong final terminator: {out:?}");
+    }
+
+    #[test]
+    fn a_lf_config_stays_lf() {
+        let mut doc = CodexToml::parse("model = \"gpt-5\"\n").unwrap();
+        doc.set_str("model", "x");
+        let out = doc.to_string_preserving();
+        assert!(!out.contains('\r'), "LF became CRLF: {out:?}");
+    }
+
+    #[test]
+    fn crlf_round_trips_idempotently() {
+        let mut doc = CodexToml::parse("zebra = 1\r\nmodel = \"old\"\r\n").unwrap();
+        doc.set_str("model", "new");
+        let once = doc.to_string_preserving();
+        let again = CodexToml::parse(&once).unwrap().to_string_preserving();
+        assert_eq!(once, again, "CRLF handling is not idempotent");
+        assert!(!once.contains("\r\r"), "carriage returns accumulated");
     }
 
     #[test]
