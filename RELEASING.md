@@ -116,11 +116,12 @@ from files rather than from a signed build, stop and rebuild signed.
 
 ### 1. Bump the version everywhere, so the three files agree
 
-`package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` must all
-carry the same version string. If `src-tauri/Cargo.toml` inherits from a
-workspace (`version.workspace = true`), bump the workspace `Cargo.toml` instead
-of the member. A mismatch produces an installer whose version does not match its
-own update manifest, and clients then either miss the update or offer it forever.
+`package.json`, `src-tauri/tauri.conf.json`, and `Cargo.toml` (the workspace
+manifest at the repository root) must all carry the same version string. The
+crates declare `version.workspace = true`, so bump `[workspace.package]` in the
+root `Cargo.toml`; there is no version to change in `src-tauri/Cargo.toml`. A
+mismatch produces an installer whose version does not match its own update
+manifest, and clients then either miss the update or offer it forever.
 
 ```powershell
 # package.json
@@ -129,15 +130,20 @@ own update manifest, and clients then either miss the update or offer it forever
 # src-tauri/tauri.conf.json
 "version": "X.Y.Z"
 
-# src-tauri/Cargo.toml, or the workspace Cargo.toml it inherits from
+# Cargo.toml, under [workspace.package]
 version = "X.Y.Z"
 ```
 
 Then confirm the Rust side picked it up:
 
 ```powershell
-cargo metadata --manifest-path src-tauri/Cargo.toml --no-deps --format-version 1
+cargo metadata --no-deps --format-version 1 |
+  ConvertFrom-Json | Select-Object -ExpandProperty packages |
+  Select-Object name, version
 ```
+
+The release workflow checks all three against the pushed tag and refuses to build
+if they disagree, so a missed bump fails in CI rather than shipping.
 
 ### 2. Update `CHANGELOG.md`
 

@@ -50,14 +50,12 @@ jobs:
           KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
         run: |
           if ([string]::IsNullOrWhiteSpace($env:KEY)) {
-            Write-Error @"
-TAURI_SIGNING_PRIVATE_KEY is not set.
-
-An unsigned release must never be published: clients verify the installer's
-signature against the public key committed in src-tauri/tauri.conf.json, so an
-unsigned update is silently rejected by every installed copy. Add the secret to
-the repository settings before releasing. See RELEASING.md.
-"@
+            Write-Host "::error::TAURI_SIGNING_PRIVATE_KEY is not set."
+            Write-Host "An unsigned release must never be published. Clients verify"
+            Write-Host "the installer's signature against the public key committed in"
+            Write-Host "src-tauri/tauri.conf.json, so an unsigned update is silently"
+            Write-Host "rejected by every installed copy. Add the secret in the"
+            Write-Host "repository settings before releasing. See RELEASING.md."
             exit 1
           }
           Write-Host "Signing key is present."
@@ -96,10 +94,17 @@ the repository settings before releasing. See RELEASING.md.
           $tag = "${{ needs.preflight.outputs.tag }}".TrimStart("v")
           $pkg = (Get-Content package.json -Raw | ConvertFrom-Json).version
           $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $cargo = (Select-String -Path src-tauri/Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"').Matches.Groups[1].Value
+          # The crates inherit their version from [workspace.package], so read it
+          # there rather than looking for a plain `version = ` in the crate.
+          $cargo = (Select-String -Path Cargo.toml -Pattern '^\s*version\s*=\s*"([^"]+)"' |
+            Select-Object -First 1).Matches.Groups[1].Value
+          if (-not $cargo) {
+            Write-Host "::error::Could not read the version from [workspace.package] in Cargo.toml."
+            exit 1
+          }
           Write-Host "tag=$tag package=$pkg tauri=$conf cargo=$cargo"
           if ($tag -ne $pkg -or $tag -ne $conf -or $tag -ne $cargo) {
-            Write-Error "Version mismatch. Bump package.json, src-tauri/tauri.conf.json, and src-tauri/Cargo.toml together."
+            Write-Host "::error::Version mismatch. Bump package.json, src-tauri/tauri.conf.json, and [workspace.package] in Cargo.toml together."
             exit 1
           }
 
@@ -145,6 +150,10 @@ the repository settings before releasing. See RELEASING.md.
           $sig = Get-Content "$($installer.FullName).sig" -Raw
           $version = "${{ needs.preflight.outputs.tag }}".TrimStart("v")
 
+          # The installer file name contains a space, which must be percent-encoded
+          # in the download URL the updater fetches.
+          $encoded = [uri]::EscapeDataString($installer.Name)
+
           # The updater manifest an installed copy fetches.
           $manifest = [ordered]@{
             version   = $version
@@ -153,12 +162,17 @@ the repository settings before releasing. See RELEASING.md.
             platforms = [ordered]@{
               "windows-x86_64" = [ordered]@{
                 signature = $sig.Trim()
-                url       = "https://github.com/${{ github.repository }}/releases/download/${{ needs.preflight.outputs.tag }}/$($installer.Name)"
+                url       = "https://github.com/${{ github.repository }}/releases/download/${{ needs.preflight.outputs.tag }}/$encoded"
               }
             }
           }
-          $manifest | ConvertTo-Json -Depth 5 |
-            Set-Content "target/release/bundle/nsis/latest.json" -Encoding utf8NoBOM
+          # Written without a BOM, which the updater's JSON parser rejects.
+          $json = $manifest | ConvertTo-Json -Depth 5
+          [System.IO.File]::WriteAllText(
+            (Join-Path (Get-Location) "target/release/bundle/nsis/latest.json"),
+            $json,
+            (New-Object System.Text.UTF8Encoding($false))
+          )
 
           "installer=$($installer.FullName)" >> $env:GITHUB_OUTPUT
           "sig=$($installer.FullName).sig" >> $env:GITHUB_OUTPUT
