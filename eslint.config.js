@@ -7,14 +7,7 @@ export default tseslint.config(
   {
     // `target` is the shared Cargo output directory at the repository root; it
     // contains generated Tauri assets that are not source and must not be linted.
-    ignores: [
-      "dist",
-      "node_modules",
-      "target",
-      "src-tauri/target",
-      "coverage",
-      "**/*.d.ts",
-    ],
+    ignores: ["dist", "node_modules", "target", "src-tauri/target", "coverage", "**/*.d.ts"],
   },
   {
     files: ["**/*.{ts,tsx}"],

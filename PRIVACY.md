@@ -72,14 +72,14 @@ All application data lives under one directory:
 Nothing is written during installation. Directories are created lazily on first
 use, so a fresh install stays inert until you actually do something.
 
-| Path | What it holds |
-| --- | --- |
-| `app.json` | Your settings: schema version, whether automatic update checks are on, the last update-check timestamp, the last project folder (only if you leave that option on), log level, and one-time notice flags. No secrets. |
-| `profiles.json` | Your provider profiles: name, base URL, model ID, which agents each targets, advanced options, and test results. **An API key never appears here.** A profile references its key by an opaque ID (`secretRef`) only. |
-| `secrets.dat` | Your API keys, each sealed with Windows DPAPI scoped to your Windows account. This is the only place a key is stored. |
-| `backups\` | The Original backup, the 20 most recent snapshots per agent, and the change history ledger. These contain agent configuration files only — never a key, because keys never live in those files. |
-| `logs\` | Local log files, redacted before writing. See below. |
-| `cache\` | Local scratch data. |
+| Path            | What it holds                                                                                                                                                                                                         |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.json`      | Your settings: schema version, whether automatic update checks are on, the last update-check timestamp, the last project folder (only if you leave that option on), log level, and one-time notice flags. No secrets. |
+| `profiles.json` | Your provider profiles: name, base URL, model ID, which agents each targets, advanced options, and test results. **An API key never appears here.** A profile references its key by an opaque ID (`secretRef`) only.  |
+| `secrets.dat`   | Your API keys, each sealed with Windows DPAPI scoped to your Windows account. This is the only place a key is stored.                                                                                                 |
+| `backups\`      | The Original backup, the 20 most recent snapshots per agent, and the change history ledger. These contain agent configuration files only — never a key, because keys never live in those files.                       |
+| `logs\`         | Local log files, redacted before writing. See below.                                                                                                                                                                  |
+| `cache\`        | Local scratch data.                                                                                                                                                                                                   |
 
 **Nothing is written outside these locations** except the agent configuration
 files you explicitly ask the app to change (`config.toml` for Codex,
@@ -211,21 +211,21 @@ You do not have to take any of this on trust. The app is MIT-licensed and the
 complete source is at <https://github.com/hisyamnurx/Eclyzer-Bridge>. The files
 that make these claims true are:
 
-| Claim | File to read |
-| --- | --- |
-| Nothing is logged without redaction | `src-tauri/src/diagnostics/redact.rs` |
-| Every log line is redacted before it is written | `src-tauri/src/diagnostics/log.rs` |
-| Log retention of 7 days / 20 MB | `src-tauri/src/diagnostics/log.rs` |
-| The diagnostics report contains no secrets | `src-tauri/src/diagnostics/report.rs` |
-| Keys are sealed with DPAPI Current User | `src-tauri/src/secrets/crypto.rs` |
-| Keys live only in `secrets.dat` | `src-tauri/src/secrets/store.rs` |
-| `profiles.json` never holds a key | `src-tauri/src/profiles/model.rs` |
-| Backups never hold a key | `src-tauri/src/backup/mod.rs` |
-| Nothing is written outside the app data folder | `src-tauri/src/paths.rs` |
-| Update checks, and that they install nothing silently | `src-tauri/src/updater.rs` |
-| The update endpoint, once per 24 hours | `src-tauri/src/updater.rs`, `src-tauri/src/commands/update.rs` |
-| TLS verification is never disabled, redirects are never followed | `src-tauri/src/testing/probes.rs` |
-| There is no generic file-read, file-write, or command-execution command | `src-tauri/src/commands/mod.rs` |
+| Claim                                                                   | File to read                                                   |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------- |
+| Nothing is logged without redaction                                     | `src-tauri/src/diagnostics/redact.rs`                          |
+| Every log line is redacted before it is written                         | `src-tauri/src/diagnostics/log.rs`                             |
+| Log retention of 7 days / 20 MB                                         | `src-tauri/src/diagnostics/log.rs`                             |
+| The diagnostics report contains no secrets                              | `src-tauri/src/diagnostics/report.rs`                          |
+| Keys are sealed with DPAPI Current User                                 | `src-tauri/src/secrets/crypto.rs`                              |
+| Keys live only in `secrets.dat`                                         | `src-tauri/src/secrets/store.rs`                               |
+| `profiles.json` never holds a key                                       | `src-tauri/src/profiles/model.rs`                              |
+| Backups never hold a key                                                | `src-tauri/src/backup/mod.rs`                                  |
+| Nothing is written outside the app data folder                          | `src-tauri/src/paths.rs`                                       |
+| Update checks, and that they install nothing silently                   | `src-tauri/src/updater.rs`                                     |
+| The update endpoint, once per 24 hours                                  | `src-tauri/src/updater.rs`, `src-tauri/src/commands/update.rs` |
+| TLS verification is never disabled, redirects are never followed        | `src-tauri/src/testing/probes.rs`                              |
+| There is no generic file-read, file-write, or command-execution command | `src-tauri/src/commands/mod.rs`                                |
 
 You can also simply watch it: the app makes no request that does not appear in
 the table above, and you can run it with a proxy or network monitor of your

@@ -158,7 +158,7 @@ review and both are easy to describe in a sentence.
 - **Imperative subject line**, as though completing the sentence "This commit
   will…". Write `Add snapshot pruning test`, not `Added` or `Adds`.
 - **Wrap at 72 columns.**
-- **Explain *why* in the body.** The diff already shows what changed; the body
+- **Explain _why_ in the body.** The diff already shows what changed; the body
   should say what problem it solves, what alternative you rejected, and any
   trade-off the reader would otherwise have to rediscover. A change that touches
   configuration safety or secret handling should say so explicitly in the body.

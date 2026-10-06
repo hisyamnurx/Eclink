@@ -46,6 +46,12 @@ export default defineConfig({
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     globals: true,
+    // React 19 only treats `act()` as valid when this flag is set. Without it
+    // every component test prints "The current testing environment is not
+    // configured to support act(...)" and state updates are not flushed
+    // deterministically, which would make the hook tests pass for the wrong
+    // reason.
+    setupFiles: ["./src/test-setup.ts"],
     // Every test runs offline against a stubbed backend; no paid provider is
     // ever contacted from the test suite.
     restoreMocks: true,

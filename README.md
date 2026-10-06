@@ -75,11 +75,11 @@ modify anything outside your own Windows account.
 
 The History screen offers four ways back, all reversible:
 
-| Option | What it does |
-| --- | --- |
-| **Undo last change** | Returns the agent to the state just before its most recent change. |
-| **Snapshots** | The 20 most recent states, one taken before every change. |
-| **Restore default** | Removes the provider Eclyzer Bridge added. Nothing else changes. |
+| Option               | What it does                                                                        |
+| -------------------- | ----------------------------------------------------------------------------------- |
+| **Undo last change** | Returns the agent to the state just before its most recent change.                  |
+| **Snapshots**        | The 20 most recent states, one taken before every change.                           |
+| **Restore default**  | Removes the provider Eclyzer Bridge added. Nothing else changes.                    |
 | **Restore original** | Puts back the exact file that existed before Eclyzer Bridge ever touched the agent. |
 
 The original backup is taken once, is never overwritten, and is never deleted
@@ -105,7 +105,7 @@ Where the agent supports it, the key never enters your configuration file at all
   then restricts to your Windows account. This is a deliberate trade-off
   documented in the code.
 
-**What DPAPI protects and what it does not.** It protects your key *at rest* —
+**What DPAPI protects and what it does not.** It protects your key _at rest_ —
 someone who copies `secrets.dat` off your machine cannot read it. It does **not**
 protect your key from malware already running as you. No local secret store can.
 

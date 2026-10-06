@@ -32,7 +32,7 @@ Two places reference where clients look for updates, and they must agree:
 }
 ```
 
-The endpoint resolves against whatever GitHub considers the *latest* release, so
+The endpoint resolves against whatever GitHub considers the _latest_ release, so
 the release you publish must be marked as the latest one. A draft release has no
 `latest/download` alias and clients will keep seeing the previous version. A
 pre-release is not returned by `latest` either — if you intend to publish a
