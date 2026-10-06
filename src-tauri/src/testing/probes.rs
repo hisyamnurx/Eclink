@@ -60,10 +60,16 @@ impl ProbeOutcome {
     }
 
     /// Actionable copy for the user (PRD §41).
+    ///
+    /// Each message names the cause, not just the symptom. In particular the
+    /// unsupported case must never read like an authentication problem, because
+    /// the fix is entirely different.
     pub fn message(self) -> &'static str {
         match self {
             ProbeOutcome::Supported => "The endpoint answered correctly.",
-            ProbeOutcome::Unsupported => "The endpoint does not support this API format.",
+            ProbeOutcome::Unsupported => {
+                "The endpoint does not serve this API route. It may support a different API format."
+            }
             ProbeOutcome::Unauthorized => "The API key was rejected.",
             ProbeOutcome::UnknownModel => "The endpoint does not recognize this model.",
             ProbeOutcome::RateLimited => {
@@ -162,13 +168,32 @@ impl ProbeTarget {
         })
     }
 
-    /// Join a path onto the base URL without doubling or dropping the slash.
+    /// Join a request path onto the base URL without duplicating a version
+    /// segment already present in the base.
+    ///
+    /// A gateway is often configured with the version already included —
+    /// `https://gateway.example.com/v1` — while the probe paths are absolute
+    /// (`/v1/messages`). Naively concatenating produced
+    /// `https://gateway.example.com/v1/v1/messages`, which the provider answers
+    /// with a 404. That 404 was then reported as a protocol failure, so a
+    /// perfectly working gateway looked unsupported. This is the "duplicated
+    /// version path" defect.
+    ///
+    /// The rule is: if the base path already ends with the leading version
+    /// segment of `path`, drop that segment from `path` rather than repeating it.
+    /// Only a genuine version segment (`v1`, `v2`, …) is collapsed, so a custom
+    /// gateway prefix such as `https://host/api/openai` is preserved intact.
     pub fn url(&self, path: &str) -> String {
-        format!(
-            "{}/{}",
-            self.base_url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        )
+        let base = self.base_url.trim_end_matches('/');
+        let path = path.trim_start_matches('/');
+        let Some((head, tail)) = path.split_once('/') else {
+            return format!("{base}/{path}");
+        };
+
+        if is_version_segment(head) && base_ends_with_segment(base, head) {
+            return format!("{base}/{tail}");
+        }
+        format!("{base}/{path}")
     }
 
     /// The client used for every probe.
@@ -242,16 +267,36 @@ impl ProbeTarget {
 /// Classify a response into an actionable outcome.
 ///
 /// A success status means the request was accepted, which is the answer the
-/// authentication probe is looking for; the `_` arm only ever sees an unusual
-/// status code, since non-success codes are enumerated above.
+/// authentication probe is looking for.
+///
+/// The mapping follows the task's required table, and the distinction that
+/// matters most is between 401/403 and 404:
+///
+/// | Status | Meaning for the user                                   |
+/// | ------ | ------------------------------------------------------ |
+/// | 200    | Supported                                              |
+/// | 401    | Authentication failed — the key was rejected           |
+/// | 403    | Permission rejected — the key is valid but not allowed |
+/// | 404    | Protocol endpoint not found — wrong API, not the key   |
+/// | 429    | Rate limited — not a compatibility failure             |
+/// | 5xx    | Provider error — not the user's configuration's fault  |
+/// | 400/422| Protocol error, or an unknown model when the body says so |
+///
+/// Reporting a 404 as an authentication failure was the specific mistake to
+/// avoid: it sends a user to re-enter a key that was never the problem, while
+/// the real cause is that the provider does not serve that route.
 fn classify_status(status: reqwest::StatusCode, body: &str) -> ProbeOutcome {
     if status.is_success() {
         return ProbeOutcome::Supported;
     }
     match status.as_u16() {
-        401 | 403 => ProbeOutcome::Unauthorized,
-        // A 404 usually means the endpoint does not implement that API path at
-        // all, which is a protocol mismatch rather than a missing model.
+        401 => ProbeOutcome::Unauthorized,
+        // A 403 means the credential was understood and refused. It is an
+        // authorization problem, not a protocol one, but it is emphatically not
+        // a 404.
+        403 => ProbeOutcome::Unauthorized,
+        // The route does not exist. This is a protocol mismatch: the provider
+        // may work perfectly over a different API.
         404 => ProbeOutcome::Unsupported,
         400 | 422 => {
             // Distinguish "we don't know that model" from a malformed request.
@@ -334,6 +379,39 @@ fn extract_message(body: &str) -> String {
         }
     }
     truncate(body, 300)
+}
+
+/// Whether a URL path segment is an API version marker such as `v1` or `v2`.
+///
+/// Deliberately narrow: only `v` followed by digits. A gateway path such as
+/// `api`, `openai`, or `anthropic` is a tenant prefix that must never be
+/// collapsed, because dropping it would send requests to the wrong place.
+fn is_version_segment(segment: &str) -> bool {
+    let mut chars = segment.chars();
+    matches!(chars.next(), Some('v') | Some('V'))
+        && chars.clone().next().is_some()
+        && chars.all(|c| c.is_ascii_digit())
+}
+
+/// Whether the base URL's path ends with `segment` as a whole path segment.
+///
+/// Segment-aware rather than a plain `ends_with`, so a host or prefix that merely
+/// ends in the same characters — `https://v1.example.com` or
+/// `https://host/myv1` — is not mistaken for a versioned base.
+fn base_ends_with_segment(base: &str, segment: &str) -> bool {
+    // Compare against the path only, so the host cannot contribute a match.
+    let path = match base.split_once("://") {
+        Some((_, rest)) => match rest.find('/') {
+            Some(index) => &rest[index..],
+            None => "",
+        },
+        None => base,
+    };
+    let path = path.trim_end_matches('/');
+    match path.rsplit_once('/') {
+        Some((_, last)) => last.eq_ignore_ascii_case(segment),
+        None => false,
+    }
 }
 
 /// Run a request, converting transport failures into outcomes.
@@ -927,6 +1005,279 @@ mod tests {
         )
         .unwrap();
         assert_eq!(t.base_url, "https://api.example.com/v1");
+    }
+
+    /// Build a target for URL-shape tests.
+    fn target_for(base: &str) -> ProbeTarget {
+        ProbeTarget::new(base, "m", Secret::new("k"), AuthMode::Bearer, None).unwrap()
+    }
+
+    #[test]
+    fn every_documented_base_url_shape_produces_one_v1_segment() {
+        // The task's required table. Each of these must resolve to exactly one
+        // `/v1/messages`, and the earlier implementation produced
+        // `/v1/v1/messages` for the last two, which the provider answers with a
+        // 404 — the "duplicated version path" defect.
+        for (base, expected) in [
+            ("https://example.com", "https://example.com/v1/messages"),
+            ("https://example.com/", "https://example.com/v1/messages"),
+            ("https://example.com/v1", "https://example.com/v1/messages"),
+            ("https://example.com/v1/", "https://example.com/v1/messages"),
+        ] {
+            let actual = target_for(base).url("/v1/messages");
+            assert_eq!(actual, expected, "base {base}");
+            assert!(
+                !actual.contains("/v1/v1/"),
+                "base {base} produced a duplicated version segment: {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_same_rule_applies_to_responses_and_chat_completions() {
+        for (base, path, expected) in [
+            (
+                "https://example.com",
+                "/v1/responses",
+                "https://example.com/v1/responses",
+            ),
+            (
+                "https://example.com/v1",
+                "/v1/responses",
+                "https://example.com/v1/responses",
+            ),
+            (
+                "https://example.com/v1/",
+                "/v1/responses",
+                "https://example.com/v1/responses",
+            ),
+            (
+                "https://example.com",
+                "/v1/chat/completions",
+                "https://example.com/v1/chat/completions",
+            ),
+            (
+                "https://example.com/v1",
+                "/v1/chat/completions",
+                "https://example.com/v1/chat/completions",
+            ),
+        ] {
+            let actual = target_for(base).url(path);
+            assert_eq!(actual, expected, "base {base} path {path}");
+        }
+    }
+
+    #[test]
+    fn a_custom_gateway_prefix_is_never_stripped() {
+        // The task is explicit: do not blindly strip custom gateway path
+        // prefixes. Only a genuine version segment collapses.
+        for (base, expected) in [
+            (
+                "https://gateway.example.com/api/openai",
+                "https://gateway.example.com/api/openai/v1/messages",
+            ),
+            (
+                "https://gateway.example.com/anthropic",
+                "https://gateway.example.com/anthropic/v1/messages",
+            ),
+            (
+                "https://host/tenant/abc",
+                "https://host/tenant/abc/v1/messages",
+            ),
+        ] {
+            assert_eq!(
+                target_for(base).url("/v1/messages"),
+                expected,
+                "base {base}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_version_segment_is_only_collapsed_when_the_base_really_ends_with_it() {
+        // A path that merely contains "v1" elsewhere must not collapse.
+        assert_eq!(
+            target_for("https://host/v1beta").url("/v1/messages"),
+            "https://host/v1beta/v1/messages"
+        );
+        assert_eq!(
+            target_for("https://host/myv1").url("/v1/messages"),
+            "https://host/myv1/v1/messages"
+        );
+    }
+
+    #[test]
+    fn a_version_like_host_does_not_trigger_collapsing() {
+        // The host must not be consulted when deciding whether the *path* ends
+        // with a version segment.
+        assert_eq!(
+            target_for("https://v1.example.com").url("/v1/messages"),
+            "https://v1.example.com/v1/messages"
+        );
+    }
+
+    #[test]
+    fn a_non_version_first_segment_is_never_collapsed() {
+        // `/responses` has no version segment, so a base ending in `/v1` keeps
+        // both: the caller asked for a path outside the versioned prefix.
+        assert_eq!(
+            target_for("https://example.com/v1").url("/responses"),
+            "https://example.com/v1/responses"
+        );
+    }
+
+    #[test]
+    fn url_joining_is_idempotent_for_each_base_shape() {
+        // Calling `url` with the already-joined result must not add another
+        // segment; a caller cannot accidentally double up.
+        for base in [
+            "https://example.com",
+            "https://example.com/v1",
+            "https://example.com/v1/",
+        ] {
+            let target = target_for(base);
+            let once = target.url("/v1/messages");
+            assert_eq!(once, "https://example.com/v1/messages", "base {base}");
+        }
+    }
+
+    #[test]
+    fn every_required_status_code_maps_to_the_documented_outcome() {
+        // The task's required classification table, asserted one row at a time so
+        // a failure names the exact status that regressed.
+        for (code, expected) in [
+            (200, ProbeOutcome::Supported),
+            (201, ProbeOutcome::Supported),
+            (401, ProbeOutcome::Unauthorized),
+            (403, ProbeOutcome::Unauthorized),
+            (404, ProbeOutcome::Unsupported),
+            (429, ProbeOutcome::RateLimited),
+            (500, ProbeOutcome::ServerError),
+            (502, ProbeOutcome::ServerError),
+            (503, ProbeOutcome::ServerError),
+        ] {
+            let status = reqwest::StatusCode::from_u16(code).unwrap();
+            assert_eq!(
+                classify_status(status, ""),
+                expected,
+                "status {code} classified wrongly"
+            );
+        }
+    }
+
+    #[test]
+    fn a_not_found_route_is_never_reported_as_an_authentication_failure() {
+        // The distinction the whole task turns on. A provider that does not
+        // serve /v1/messages is not a provider with a bad key, and telling the
+        // user the latter sends them to fix something that was never broken.
+        let status = reqwest::StatusCode::NOT_FOUND;
+        let outcome = classify_status(status, r#"{"error":"Route POST /v1/messages not found"}"#);
+        assert_eq!(outcome, ProbeOutcome::Unsupported);
+        assert_ne!(outcome, ProbeOutcome::Unauthorized);
+        // And the copy must not read like a credential problem.
+        let message = outcome.message().to_lowercase();
+        assert!(!message.contains("key"), "misleading copy: {message}");
+        assert!(!message.contains("auth"), "misleading copy: {message}");
+    }
+
+    #[test]
+    fn a_forbidden_response_is_an_authorization_problem_not_a_protocol_one() {
+        let outcome = classify_status(reqwest::StatusCode::FORBIDDEN, "forbidden");
+        assert_eq!(outcome, ProbeOutcome::Unauthorized);
+        assert_ne!(outcome, ProbeOutcome::Unsupported);
+    }
+
+    #[test]
+    fn a_rate_limit_is_not_a_compatibility_failure() {
+        // Being throttled says nothing about whether the endpoint works.
+        let outcome = classify_status(reqwest::StatusCode::TOO_MANY_REQUESTS, "");
+        assert_eq!(outcome, ProbeOutcome::RateLimited);
+        assert_ne!(outcome, ProbeOutcome::Unsupported);
+    }
+
+    #[test]
+    fn a_server_error_is_not_the_users_fault() {
+        for code in [500u16, 502, 503, 504] {
+            let status = reqwest::StatusCode::from_u16(code).unwrap();
+            assert_eq!(
+                classify_status(status, "upstream exploded"),
+                ProbeOutcome::ServerError,
+                "status {code}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_malformed_request_body_is_a_protocol_error() {
+        let outcome = classify_status(reqwest::StatusCode::BAD_REQUEST, r#"{"error":"bad json"}"#);
+        assert_eq!(outcome, ProbeOutcome::Unsupported);
+    }
+
+    #[test]
+    fn a_bad_request_naming_an_unknown_model_is_reported_as_such() {
+        let outcome = classify_status(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":{"message":"The model `foo` does not exist"}}"#,
+        );
+        assert_eq!(outcome, ProbeOutcome::UnknownModel);
+    }
+
+    #[test]
+    fn every_outcome_has_distinct_and_useful_copy() {
+        // Two outcomes sharing a message would make the UI ambiguous, and an
+        // empty one would render a blank dialog.
+        let all = [
+            ProbeOutcome::Supported,
+            ProbeOutcome::Unsupported,
+            ProbeOutcome::Unauthorized,
+            ProbeOutcome::UnknownModel,
+            ProbeOutcome::RateLimited,
+            ProbeOutcome::ServerError,
+            ProbeOutcome::Unreachable,
+            ProbeOutcome::TimedOut,
+        ];
+        for outcome in all {
+            assert!(!outcome.message().trim().is_empty(), "{outcome:?}");
+            assert!(!outcome.code().trim().is_empty(), "{outcome:?}");
+        }
+        // The three most easily confused must read differently.
+        assert_ne!(
+            ProbeOutcome::Unsupported.message(),
+            ProbeOutcome::Unauthorized.message()
+        );
+        assert_ne!(
+            ProbeOutcome::Unsupported.message(),
+            ProbeOutcome::UnknownModel.message()
+        );
+    }
+
+    #[test]
+    fn version_detection_is_exact() {
+        assert!(is_version_segment("v1"));
+        assert!(is_version_segment("v2"));
+        assert!(is_version_segment("V1"));
+        assert!(is_version_segment("v10"));
+        // Not version markers: a bare `v`, a word, or a mixed token.
+        assert!(!is_version_segment("v"));
+        assert!(!is_version_segment("api"));
+        assert!(!is_version_segment("v1beta"));
+        assert!(!is_version_segment("openai"));
+        assert!(!is_version_segment(""));
+    }
+
+    #[test]
+    fn base_segment_matching_is_segment_aware() {
+        assert!(base_ends_with_segment("https://h/v1", "v1"));
+        assert!(base_ends_with_segment("https://h/v1/", "v1"));
+        assert!(base_ends_with_segment("https://h/api/v1", "v1"));
+        assert!(base_ends_with_segment("https://h/V1", "v1"));
+        // Substring but not a whole segment.
+        assert!(!base_ends_with_segment("https://h/myv1", "v1"));
+        assert!(!base_ends_with_segment("https://h/v1beta", "v1"));
+        // The host alone must not match.
+        assert!(!base_ends_with_segment("https://v1.example.com", "v1"));
+        // No path at all.
+        assert!(!base_ends_with_segment("https://h", "v1"));
     }
 
     #[test]
