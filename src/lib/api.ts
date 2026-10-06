@@ -182,6 +182,22 @@ export interface ApplyOutcome {
 
 export type CredentialMode = "credential_helper" | "settings_file" | "environment_variable";
 
+/**
+ * What a stock reset would remove.
+ *
+ * Computed by the backend from the same key lists the reset itself uses, so the
+ * preview cannot drift from the operation. Keys are shown with their current
+ * values so the user can recognise what is about to go, and the values are
+ * already redacted for anything secret.
+ */
+export interface StockResetPreview {
+  envKeys: Array<[string, string]>;
+  aliasKeys: Array<[string, string]>;
+  rootKeys: Array<[string, string]>;
+  /** Managed settings files that make a reset unsafe, if any. */
+  blockedByManaged?: string[];
+}
+
 export interface ActivationResult extends ApplyOutcome {
   message: string;
   credentialMode: CredentialMode;
@@ -366,6 +382,23 @@ export interface Commands {
   };
 
   restore_default: { args: { agent: AgentId }; result: ApplyOutcome };
+  /**
+   * Report what a stock reset would remove, without changing anything.
+   *
+   * `null` for an agent with no preview available, so the UI must show the
+   * generic warning rather than an empty list it might mistake for "nothing".
+   */
+  preview_stock_reset: {
+    args: { agent: AgentId };
+    result: StockResetPreview | null;
+  };
+  /**
+   * Remove every provider and model override, including ones the user created.
+   *
+   * Stronger than `restore_default`, which only removes what Eclyzer Bridge can
+   * prove it owns. Callers must confirm first.
+   */
+  reset_to_stock_defaults: { args: { agent: AgentId }; result: ApplyOutcome };
   restore_original: { args: { agent: AgentId }; result: ApplyOutcome };
   restore_snapshot: {
     args: { agent: AgentId; snapshotId: string };

@@ -49,6 +49,56 @@ pub async fn restore_default(
     .await
 }
 
+/// Report what a stock reset would remove, without changing anything.
+///
+/// Callers must show this before confirming, because the operation is
+/// deliberately willing to delete provider and model settings the user created
+/// by hand.
+#[tauri::command]
+pub async fn preview_stock_reset(
+    agent: String,
+) -> CommandResult<Option<crate::adapters::claude::StockResetPreview>> {
+    let agent = parse_agent(&agent)?;
+    blocking(move || {
+        // Only Claude Code has a settings file with these keys; for Codex the
+        // reset targets `model` and `model_provider` in TOML, which has no
+        // equivalent preview yet, so it reports nothing rather than a wrong list.
+        Ok(match agent {
+            crate::profiles::AgentId::Claude => {
+                Some(crate::adapters::claude::stock_reset_preview())
+            }
+            crate::profiles::AgentId::Codex => None,
+        })
+    })
+    .await
+}
+
+/// Remove every provider and model override, returning the agent to stock.
+///
+/// Stronger than `restore_default`: it also removes overrides the user created
+/// themselves, which is the only way to get back to the built-in behaviour. The
+/// caller is responsible for confirming first, having shown the preview.
+#[tauri::command]
+pub async fn reset_to_stock_defaults(
+    state: tauri::State<'_, AppState>,
+    agent: String,
+) -> CommandResult<crate::adapters::ApplyOutcome> {
+    let state = state.inner().clone();
+    let agent = parse_agent(&agent)?;
+    blocking(move || {
+        let adapter = state.adapter(agent);
+        let options = ApplyOptions {
+            secret: None,
+            helper_path: state.helper_path(),
+            // No hash guard: this is an explicit, previewed, confirmed action.
+            expected_sha256: None,
+            agent_version: None,
+        };
+        adapter.reset_to_stock_defaults(&options)
+    })
+    .await
+}
+
 /// Restore the immutable pre-Bridge original (PRD §29).
 #[tauri::command]
 pub async fn restore_original(

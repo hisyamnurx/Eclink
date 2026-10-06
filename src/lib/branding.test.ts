@@ -41,10 +41,9 @@ const ICO_MAGIC = Buffer.from([0x00, 0x00, 0x01, 0x00]);
 
 describe("application icons", () => {
   it("every configured icon exists and is the format its extension claims", () => {
-    const configured = [
-      ...conf.bundle.icon,
-      conf.bundle.windows?.nsis?.installerIcon,
-    ].filter((value): value is string => Boolean(value));
+    const configured = [...conf.bundle.icon, conf.bundle.windows?.nsis?.installerIcon].filter(
+      (value): value is string => Boolean(value),
+    );
 
     expect(configured.length).toBeGreaterThan(0);
     for (const entry of configured) {
@@ -53,15 +52,11 @@ describe("application icons", () => {
 
       const head = readFileSync(path).subarray(0, 8);
       if (entry.endsWith(".ico")) {
-        expect(
-          head.subarray(0, 4).equals(ICO_MAGIC),
-          `${entry} is not a real .ico file`,
-        ).toBe(true);
+        expect(head.subarray(0, 4).equals(ICO_MAGIC), `${entry} is not a real .ico file`).toBe(
+          true,
+        );
       } else {
-        expect(
-          head.equals(PNG_MAGIC),
-          `${entry} is not a real PNG file`,
-        ).toBe(true);
+        expect(head.equals(PNG_MAGIC), `${entry} is not a real PNG file`).toBe(true);
       }
       // A zero-byte or stub icon would pass a magic-number check alone.
       expect(statSync(path).size, `${entry} looks empty`).toBeGreaterThan(512);
@@ -93,9 +88,7 @@ describe("application icons", () => {
     // The build must not depend on a path on one developer's machine.
     for (const entry of conf.bundle.icon) {
       expect(entry.startsWith("/"), `${entry} is an absolute path`).toBe(false);
-      expect(/^[A-Za-z]:/.test(entry), `${entry} is a Windows absolute path`).toBe(
-        false,
-      );
+      expect(/^[A-Za-z]:/.test(entry), `${entry} is a Windows absolute path`).toBe(false);
     }
     const raw = readText("src-tauri/tauri.conf.json");
     expect(raw).not.toMatch(/[A-Za-z]:\\\\/);
@@ -135,15 +128,15 @@ describe("in-app branding", () => {
   });
 
   it("keeps the documentation wordmark pointing at a committed asset", () => {
-    for (const [doc, asset] of [
+    const docs: Array<[string, string]> = [
       ["README.md", "0-Docs/logo.png"],
       ["0-Docs/README.md", "logo.png"],
-    ]) {
+    ];
+    for (const [doc, asset] of docs) {
       expect(readText(doc), `${doc} does not show the logo`).toContain(asset);
+      // The asset path is written relative to the document that shows it.
       const path = resolve(repoRoot, doc, "..", asset);
-      expect(existsSync(path), `${asset} referenced by ${doc} is missing`).toBe(
-        true,
-      );
+      expect(existsSync(path), `${asset} referenced by ${doc} is missing`).toBe(true);
     }
   });
 });

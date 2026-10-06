@@ -170,6 +170,14 @@ impl ActiveConfiguration {
 
 /// What an apply operation intends to do. Used for snapshot reasons and the
 /// history feed (PRD §27).
+///
+/// `RestoreDefault` and `ResetToStockDefaults` are deliberately separate. The
+/// first removes only what Eclyzer Bridge can prove it owns, so it can never
+/// destroy the user's own configuration. The second deliberately removes every
+/// provider/model override regardless of who wrote it, because that is the only
+/// way to return an agent to stock behaviour — and it therefore requires
+/// explicit confirmation. Conflating them was the reason a user could press
+/// "Restore Default" and still find custom gateway models in `/model`.
 #[derive(Debug, Clone)]
 pub enum MutationReason {
     ActivateProfile {
@@ -177,6 +185,7 @@ pub enum MutationReason {
         profile_name: String,
     },
     RestoreDefault,
+    ResetToStockDefaults,
     RestoreOriginal,
     RestoreSnapshot {
         snapshot_id: String,
@@ -190,6 +199,7 @@ impl MutationReason {
         match self {
             MutationReason::ActivateProfile { .. } => "activate_profile",
             MutationReason::RestoreDefault => "restore_default",
+            MutationReason::ResetToStockDefaults => "reset_stock_defaults",
             MutationReason::RestoreOriginal => "restore_original",
             MutationReason::RestoreSnapshot { .. } => "restore_snapshot",
             MutationReason::UndoLastChange => "undo",
@@ -203,6 +213,7 @@ impl MutationReason {
                 format!("Activated {profile_name}")
             }
             MutationReason::RestoreDefault => "Restored default configuration".to_string(),
+            MutationReason::ResetToStockDefaults => "Reset to stock defaults".to_string(),
             MutationReason::RestoreOriginal => "Restored original configuration".to_string(),
             MutationReason::RestoreSnapshot { .. } => "Restored a snapshot".to_string(),
             MutationReason::UndoLastChange => "Undid last change".to_string(),
@@ -317,7 +328,23 @@ pub trait AgentAdapter: Send + Sync {
     /// Remove every Bridge-owned setting, returning the agent to its own
     /// default provider while preserving login and unrelated settings
     /// (PRD §17, §30).
+    ///
+    /// Ownership is proved, not assumed: a value the user set by hand is left
+    /// alone even when it looks like the kind of thing Bridge writes.
     fn restore_default(&self, options: &ApplyOptions<'_>) -> BridgeResult<ApplyOutcome>;
+
+    /// Remove **every** provider and model override, whoever wrote it, so the
+    /// agent returns to its stock behaviour.
+    ///
+    /// This is intentionally stronger than [`Self::restore_default`], and
+    /// intentionally does not preserve the user's own provider or model
+    /// settings — that is the entire point, and it is why the UI must confirm
+    /// before calling it. Authentication, sessions, MCP configuration,
+    /// permissions, hooks, and plugins are still preserved: only the settings
+    /// that redirect where requests go and which model answers them are cleared.
+    ///
+    /// Managed (organization) settings are never touched.
+    fn reset_to_stock_defaults(&self, options: &ApplyOptions<'_>) -> BridgeResult<ApplyOutcome>;
 
     /// Restore the immutable pre-Bridge original config (PRD §29).
     fn restore_original(&self, options: &ApplyOptions<'_>) -> BridgeResult<ApplyOutcome>;

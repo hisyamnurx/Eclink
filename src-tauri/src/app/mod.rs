@@ -52,6 +52,8 @@ pub fn builder() -> BridgeResult<tauri::Builder<tauri::Wry>> {
             crate::commands::launch_agent,
             // ---- recovery -----------------------------------------------
             crate::commands::restore_default,
+            crate::commands::preview_stock_reset,
+            crate::commands::reset_to_stock_defaults,
             crate::commands::restore_original,
             crate::commands::restore_snapshot,
             crate::commands::undo_last_change,

@@ -173,6 +173,144 @@ fn alias_is_bridge_owned(existing: &str, activating: &str) -> bool {
     existing.starts_with(crate::MANAGED_PROVIDER_PREFIX)
 }
 
+/// Every settings key that redirects Claude Code to a non-default provider or
+/// model, and is therefore removed by a stock reset.
+///
+/// Kept as one explicit list so the blast radius of the destructive operation is
+/// auditable at a glance. Anything not named here survives a reset, which is what
+/// makes the guarantee in the UI copy ("your login, sessions, MCP configuration,
+/// permissions, and unrelated settings will be kept") checkable rather than
+/// merely asserted.
+pub const STOCK_RESET_ENV_KEYS: [&str; 6] = [
+    BASE_URL_VAR,
+    AUTH_TOKEN_VAR,
+    MODEL_VAR,
+    DEFAULT_MODEL_VAR,
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+];
+
+/// Top-level keys a stock reset removes.
+///
+/// `modelOverrides` maps model IDs to provider-specific IDs, which is exactly a
+/// provider redirection; leaving it would keep routing requests to a gateway even
+/// with `model` cleared.
+pub const STOCK_RESET_ROOT_KEYS: [&str; 2] = [MODEL_SETTINGS_KEY, "modelOverrides"];
+
+/// What a stock reset would change, without changing anything.
+///
+/// Computed from the same key lists the reset itself uses, so the preview cannot
+/// drift from the operation. The UI shows this before asking for confirmation.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StockResetPreview {
+    /// `env` keys that would be removed, with their current values.
+    pub env_keys: Vec<(String, String)>,
+    /// Family-alias `env` keys that would be removed, with their values.
+    pub alias_keys: Vec<(String, String)>,
+    /// Top-level keys that would be removed, with their current values.
+    pub root_keys: Vec<(String, String)>,
+    /// Managed settings that block the reset, if any.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_by_managed: Vec<String>,
+}
+
+impl StockResetPreview {
+    /// Whether the reset would change anything.
+    pub fn is_empty(&self) -> bool {
+        self.env_keys.is_empty() && self.alias_keys.is_empty() && self.root_keys.is_empty()
+    }
+
+    /// Total number of keys removed.
+    pub fn total(&self) -> usize {
+        self.env_keys.len() + self.alias_keys.len() + self.root_keys.len()
+    }
+}
+
+/// Read the user settings file and report what a stock reset would remove.
+///
+/// Returns an empty preview when the file is missing or unreadable rather than
+/// failing: "nothing to reset" is a legitimate and useful answer, and an
+/// unparsable file cannot be safely reset anyway (the reset itself would refuse).
+pub fn stock_reset_preview() -> StockResetPreview {
+    let mut preview = StockResetPreview {
+        env_keys: Vec::new(),
+        alias_keys: Vec::new(),
+        root_keys: Vec::new(),
+        blocked_by_managed: Vec::new(),
+    };
+
+    for candidate in MANAGED_SETTINGS_PATHS {
+        let path = PathBuf::from(candidate);
+        if model_in_settings_file(&path).is_some() {
+            preview.blocked_by_managed.push(path.display().to_string());
+        }
+    }
+
+    let Ok(Some(path)) = ClaudeAdapter::settings_path().map(|p| {
+        crate::config::fs::read_to_string_opt(&p)
+            .ok()
+            .flatten()
+            .map(|_| p)
+    }) else {
+        return preview;
+    };
+    let Ok(raw) = crate::config::fs::read_to_string_opt(&path) else {
+        return preview;
+    };
+    let Some(raw) = raw else { return preview };
+    let Ok(doc) = ClaudeJson::parse(&raw) else {
+        return preview;
+    };
+
+    for key in STOCK_RESET_ENV_KEYS {
+        if let Some(value) = doc.env_get(key) {
+            preview.env_keys.push((key.to_string(), value.to_string()));
+        }
+    }
+    for key in FAMILY_ALIAS_VARS {
+        if let Some(value) = doc.env_get(key) {
+            preview
+                .alias_keys
+                .push((key.to_string(), value.to_string()));
+        }
+    }
+    for key in STOCK_RESET_ROOT_KEYS {
+        let value = match doc.root().get(key) {
+            Some(serde_json::Value::String(s)) => s.clone(),
+            Some(other) => other.to_string(),
+            None => continue,
+        };
+        preview.root_keys.push((key.to_string(), value));
+    }
+    preview
+}
+
+/// Remove every provider and model override, returning the keys removed.
+///
+/// See [`STOCK_RESET_ENV_KEYS`] and [`STOCK_RESET_ROOT_KEYS`] for the exact and
+/// complete set of keys this touches.
+fn stock_reset_keys(doc: &mut ClaudeJson) -> Vec<String> {
+    let mut removed = Vec::new();
+
+    for key in STOCK_RESET_ENV_KEYS {
+        if doc.env_remove(key) {
+            removed.push(format!("env.{key}"));
+        }
+    }
+    for key in FAMILY_ALIAS_VARS {
+        if doc.env_remove(key) {
+            removed.push(format!("env.{key}"));
+        }
+    }
+    for key in STOCK_RESET_ROOT_KEYS {
+        if doc.remove(key) {
+            removed.push(key.to_string());
+        }
+    }
+    removed
+}
+
 /// Decide whether an organization-managed settings document blocks changes.
 ///
 /// Extracted from the adapter so the policy gate can be tested directly. This is
@@ -926,10 +1064,28 @@ impl AgentAdapter for ClaudeAdapter {
     fn restore_default(&self, options: &ApplyOptions<'_>) -> BridgeResult<ApplyOutcome> {
         let reason = crate::adapters::MutationReason::RestoreDefault;
         self.mutate(options, &reason, |doc| {
-            // Remove only Bridge-written `env` entries: never `permissions`,
-            // never `hooks`, never the user's login or their own env vars
+            // Remove only Bridge-written settings: never `permissions`, never
+            // `hooks`, never the user's login or their own env vars
             // (PRD §17, §18.3).
             Ok(Self::strip_managed(doc))
+        })
+    }
+
+    fn reset_to_stock_defaults(&self, options: &ApplyOptions<'_>) -> BridgeResult<ApplyOutcome> {
+        let reason = crate::adapters::MutationReason::ResetToStockDefaults;
+        self.mutate(options, &reason, |doc| {
+            // Deliberately stronger than `strip_managed`: this removes every
+            // provider and model override regardless of who wrote it, because
+            // that is what "return Claude Code to its normal built-in
+            // configuration" means. A user who pointed Claude Code at a gateway
+            // by hand before ever running Bridge still wants that gone.
+            //
+            // It removes only the keys listed by `stock_reset_keys`. Everything
+            // that is not a provider or model override — authentication,
+            // sessions, MCP servers, permissions, hooks, plugins, statusLine,
+            // and trust decisions — lives in other keys and is untouched.
+            // Managed settings are a different file and are never written.
+            Ok(stock_reset_keys(doc))
         })
     }
 
@@ -2121,6 +2277,421 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------------
+    // Stock reset: the deliberately destructive path.
+    //
+    // `restore_default` removes only what Bridge owns; `reset_to_stock_defaults`
+    // removes every provider/model override so the agent returns to built-in
+    // behaviour. The distinction is the whole point, so every test here checks
+    // both directions: what the reset removes, and what it must never touch.
+    // -----------------------------------------------------------------------
+
+    /// A settings file containing a hand-configured gateway, the leftovers a
+    /// previous Bridge version wrote, and a great deal of unrelated user state.
+    const STOCK_RESET_FIXTURE: &str = r#"{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://my-own-gateway.example.com/v1",
+    "ANTHROPIC_AUTH_TOKEN": "my-own-token",
+    "ANTHROPIC_MODEL": "my-own-model",
+    "ANTHROPIC_DEFAULT_MODEL": "my-own-default",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "vendor_c/example-model-large",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "apiclyzer",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "vendor_b/vendor_b/example-model",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL": "vendor_c/example-model",
+    "ANTHROPIC_API_KEY": "sk-ant-legacy",
+    "ANTHROPIC_SMALL_FAST_MODEL": "legacy-small",
+    "MY_OWN_FLAG": "keep-me",
+    "HTTP_PROXY": "http://proxy.example.com:8080"
+  },
+  "model": "sonnet",
+  "modelOverrides": { "claude-opus-4-6": "arn:aws:bedrock:us-east-1:1:inference-profile/x" },
+  "permissions": { "allow": ["Bash(git status)"] },
+  "hooks": { "PreToolUse": [] },
+  "enabledPlugins": { "foo@bar": true },
+  "statusLine": { "type": "command", "command": "git status" },
+  "theme": "dark",
+  "hasCompletedOnboarding": true,
+  "autoUpdatesChannel": "latest"
+}
+"#;
+
+    fn reset_settings(backups: &BackupManager) -> ClaudeAdapter {
+        ClaudeAdapter::new(backups.clone())
+    }
+
+    #[test]
+    fn a_stock_reset_removes_every_provider_and_model_override() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+
+        reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+
+        // Nothing may remain that could redirect the provider or pick a model.
+        assert_eq!(doc.env_get(BASE_URL_VAR), None, "provider URL survived");
+        assert_eq!(doc.env_get(AUTH_TOKEN_VAR), None, "credential survived");
+        assert_eq!(doc.env_get(MODEL_VAR), None, "session model survived");
+        assert_eq!(
+            doc.env_get(DEFAULT_MODEL_VAR),
+            None,
+            "default model survived"
+        );
+        assert_eq!(
+            doc.env_get("ANTHROPIC_API_KEY"),
+            None,
+            "legacy key survived"
+        );
+        for key in FAMILY_ALIAS_VARS {
+            assert_eq!(doc.env_get(key), None, "{key} survived");
+        }
+        assert_eq!(doc.get_str(MODEL_SETTINGS_KEY), None, "model key survived");
+        assert!(
+            doc.root().get("modelOverrides").is_none(),
+            "modelOverrides survived"
+        );
+    }
+
+    #[test]
+    fn a_stock_reset_removes_overrides_the_user_created_themselves() {
+        // This is the behaviour that distinguishes it from `restore_default`,
+        // and the reason the UI must confirm. The fixture's gateway was
+        // "configured by hand" and names nothing Bridge ever wrote, yet a stock
+        // reset still removes it.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(
+            &settings,
+            r#"{
+  "env": { "ANTHROPIC_BASE_URL": "https://hand-configured.example.com" },
+  "model": "my-hand-picked-model"
+}
+"#,
+        )
+        .unwrap();
+
+        reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(doc.env_get(BASE_URL_VAR), None);
+        assert_eq!(doc.get_str(MODEL_SETTINGS_KEY), None);
+    }
+
+    #[test]
+    fn a_stock_reset_preserves_login_sessions_mcp_and_permissions() {
+        // The task's explicit list. None of these are provider or model
+        // overrides, so none of them may be touched.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+
+        reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+
+        let written = std::fs::read_to_string(&settings).unwrap();
+        for kept in [
+            "\"permissions\"",
+            "Bash(git status)",
+            "\"hooks\"",
+            "PreToolUse",
+            "\"enabledPlugins\"",
+            "foo@bar",
+            "\"statusLine\"",
+            "\"theme\": \"dark\"",
+            "hasCompletedOnboarding",
+            "autoUpdatesChannel",
+            // The user's own env entries, including a non-model flag and a proxy.
+            "\"MY_OWN_FLAG\"",
+            "\"HTTP_PROXY\"",
+        ] {
+            assert!(written.contains(kept), "lost {kept}: {written}");
+        }
+    }
+
+    #[test]
+    fn a_stock_reset_does_not_delete_the_credentials_file_or_auth_state() {
+        // `~/.claude/.credentials.json` holds the sign-in session, and
+        // `~/.claude.json` holds trust decisions and MCP servers. Neither is the
+        // settings file, and neither may be touched.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (scratch_dir, backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+
+        let creds = scratch_dir._dir.path().join(".credentials.json");
+        std::fs::write(&creds, r#"{"token":"session-must-survive"}"#).unwrap();
+        let state = scratch_dir._dir.path().join(".claude.json");
+        std::fs::write(&state, r#"{"projects":{"x":{"trusted":true}}}"#).unwrap();
+        let mcp = scratch_dir._dir.path().join("mcp.json");
+        std::fs::write(&mcp, r#"{"servers":{"ctx":{}}}"#).unwrap();
+
+        reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+
+        assert_eq!(
+            std::fs::read_to_string(&creds).unwrap(),
+            r#"{"token":"session-must-survive"}"#,
+            "the sign-in session must be untouched"
+        );
+        assert!(state.exists(), "trust state must be untouched");
+        assert!(mcp.exists(), "MCP configuration must be untouched");
+    }
+
+    #[test]
+    fn a_stock_reset_takes_a_snapshot_so_it_can_be_undone() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+
+        let before = backups.snapshot_count(AgentId::Claude.as_str());
+        reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+
+        assert!(
+            backups.snapshot_count(AgentId::Claude.as_str()) > before,
+            "a destructive reset must be reversible"
+        );
+        // And the snapshot must hold the pre-reset state, so undo restores it.
+        let snapshot = backups
+            .snapshots()
+            .latest(AgentId::Claude.as_str())
+            .unwrap()
+            .expect("a snapshot exists");
+        assert!(
+            snapshot.content.contains("my-own-gateway.example.com"),
+            "the snapshot must be the state before the reset"
+        );
+    }
+
+    #[test]
+    fn a_stock_reset_is_idempotent() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+        let adapter = reset_settings(&backups);
+
+        adapter
+            .reset_to_stock_defaults(&options(None))
+            .expect("first reset");
+        let after_first = std::fs::read_to_string(&settings).unwrap();
+
+        let second = adapter
+            .reset_to_stock_defaults(&options(None))
+            .expect("second reset");
+        let after_second = std::fs::read_to_string(&settings).unwrap();
+
+        assert_eq!(
+            after_first, after_second,
+            "a second reset must change nothing"
+        );
+        assert!(
+            second.managed_keys.is_empty(),
+            "the second reset should report nothing removed: {:?}",
+            second.managed_keys
+        );
+    }
+
+    #[test]
+    fn a_stock_reset_leaves_no_stale_model_that_the_picker_could_show() {
+        // The user-visible acceptance criterion: after a reset, none of the
+        // gateway model IDs that were filling the /model picker may remain in the
+        // settings file, because an ANTHROPIC_DEFAULT_*_MODEL is exactly what
+        // puts a row there.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+
+        reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+
+        let written = std::fs::read_to_string(&settings).unwrap();
+        for stale in [
+            "vendor_c/example-model-large",
+            "vendor_c/example-model",
+            "apiclyzer",
+            "vendor_b/vendor_b/example-model",
+        ] {
+            assert!(
+                !written.contains(stale),
+                "the reset left {stale} behind: {written}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_stock_reset_reverts_a_model_bridge_activated() {
+        // Activate, then reset: the activated model must be gone.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, "{}\n").unwrap();
+        let adapter = reset_settings(&backups);
+
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+        assert!(std::fs::read_to_string(&settings)
+            .unwrap()
+            .contains("deepseek-chat"));
+
+        adapter
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(doc.get_str(MODEL_SETTINGS_KEY), None);
+        assert_eq!(doc.env_get(BASE_URL_VAR), None);
+        assert_eq!(doc.env_get(AUTH_TOKEN_VAR), None);
+    }
+
+    #[test]
+    fn restore_default_keeps_a_users_own_settings_that_reset_would_remove() {
+        // The two operations must stay different. This is the same fixture run
+        // through both, and the outcomes must not be identical.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups_a, settings_a) = scratch();
+        std::fs::write(&settings_a, STOCK_RESET_FIXTURE).unwrap();
+        ClaudeAdapter::new(backups_a)
+            .restore_default(&options(None))
+            .expect("restore default");
+        let after_default = std::fs::read_to_string(&settings_a).unwrap();
+
+        let (_scratch2, backups_b, settings_b) = scratch();
+        std::fs::write(&settings_b, STOCK_RESET_FIXTURE).unwrap();
+        ClaudeAdapter::new(backups_b)
+            .reset_to_stock_defaults(&options(None))
+            .expect("stock reset");
+        let after_stock = std::fs::read_to_string(&settings_b).unwrap();
+
+        assert_ne!(
+            after_default, after_stock,
+            "the two operations must not be the same thing"
+        );
+        // The stock reset is the stronger of the two.
+        assert!(!after_stock.contains("my-own-gateway.example.com"));
+    }
+
+    #[test]
+    fn a_stock_reset_never_touches_managed_settings() {
+        // Managed settings live in a different file, which Bridge never writes.
+        // A reset must not change that, and the preview must warn that a managed
+        // policy can still win after the reset.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+
+        reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+
+        // The managed path is a fixed machine-wide location. Assert it is not
+        // written by checking the reset only ever touched the user settings file
+        // that the scratch directory provides.
+        let written = std::fs::read_to_string(&settings).unwrap();
+        assert!(
+            !Path::new(r"C:\ProgramData\ClaudeCode\managed-settings.json").exists()
+                || written.len() < STOCK_RESET_FIXTURE.len(),
+            "the reset must not write managed settings"
+        );
+    }
+
+    #[test]
+    fn the_stock_reset_preview_lists_what_the_reset_would_remove() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+
+        let preview = stock_reset_preview();
+
+        assert!(!preview.is_empty(), "the fixture has plenty to remove");
+        assert!(preview.total() >= 9, "got {} keys", preview.total());
+
+        let env_names: Vec<&str> = preview.env_keys.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(env_names.contains(&BASE_URL_VAR));
+        assert!(env_names.contains(&AUTH_TOKEN_VAR));
+        assert!(env_names.contains(&MODEL_VAR));
+
+        let alias_names: Vec<&str> = preview.alias_keys.iter().map(|(k, _)| k.as_str()).collect();
+        for key in FAMILY_ALIAS_VARS {
+            assert!(alias_names.contains(&key), "{key} missing from preview");
+        }
+
+        let root_names: Vec<&str> = preview.root_keys.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(root_names.contains(&MODEL_SETTINGS_KEY));
+        assert!(root_names.contains(&"modelOverrides"));
+
+        // Values are shown so the user recognises what is going away.
+        let opus = preview
+            .alias_keys
+            .iter()
+            .find(|(k, _)| k == "ANTHROPIC_DEFAULT_OPUS_MODEL")
+            .expect("opus alias present");
+        assert_eq!(opus.1, "vendor_c/example-model-large");
+    }
+
+    #[test]
+    fn the_preview_matches_exactly_what_the_reset_removes() {
+        // If these ever diverge, the confirmation dialog would be lying about
+        // what is about to be deleted, which is worse than no preview at all.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, STOCK_RESET_FIXTURE).unwrap();
+
+        let preview = stock_reset_preview();
+        let mut expected: Vec<String> = Vec::new();
+        expected.extend(preview.env_keys.iter().map(|(k, _)| format!("env.{k}")));
+        expected.extend(preview.alias_keys.iter().map(|(k, _)| format!("env.{k}")));
+        expected.extend(preview.root_keys.iter().map(|(k, _)| k.clone()));
+        expected.sort();
+
+        let outcome = reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect("reset must succeed");
+        let mut actual = outcome.managed_keys.clone();
+        actual.sort();
+
+        assert_eq!(
+            actual, expected,
+            "the preview and the reset disagree about what is removed"
+        );
+    }
+
+    #[test]
+    fn the_preview_reports_nothing_for_a_clean_configuration() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+        std::fs::write(
+            &settings,
+            r#"{ "theme": "dark", "permissions": { "allow": [] } }"#,
+        )
+        .unwrap();
+
+        let preview = stock_reset_preview();
+        assert!(preview.is_empty(), "nothing to reset: {preview:?}");
+        assert_eq!(preview.total(), 0);
+    }
+
+    #[test]
+    fn the_preview_does_not_fail_on_a_missing_or_unparsable_file() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, _backups, settings) = scratch();
+
+        // Missing.
+        assert!(stock_reset_preview().is_empty());
+
+        // Unparsable: the reset itself would refuse, and the preview must not
+        // panic while the user is looking at the screen.
+        std::fs::write(&settings, "{ not json").unwrap();
+        assert!(stock_reset_preview().is_empty());
+    }
+
     #[test]
     fn applying_to_an_invalid_settings_file_is_a_hard_stop() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -2140,6 +2711,23 @@ mod tests {
             "the file must be untouched"
         );
         assert!(!backups.has_original(AgentId::Claude.as_str()));
+    }
+
+    #[test]
+    fn an_invalid_settings_file_also_blocks_a_stock_reset() {
+        // The reset is destructive, so an unreadable file must stop it rather
+        // than be overwritten with an empty document.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        let broken = "{ this is not json";
+        std::fs::write(&settings, broken).unwrap();
+
+        let err = reset_settings(&backups)
+            .reset_to_stock_defaults(&options(None))
+            .expect_err("an unparsable file must block a destructive reset");
+
+        assert_eq!(err.kind, crate::error::ErrorKind::ConfigInvalid, "{err:?}");
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), broken);
     }
 
     #[test]

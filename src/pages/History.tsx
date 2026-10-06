@@ -19,7 +19,13 @@ import {
   Modal,
   Tabs,
 } from "../components/ui";
-import { call, type AgentId, type ApplyOutcome, type SnapshotView } from "../lib/api";
+import {
+  call,
+  type AgentId,
+  type ApplyOutcome,
+  type SnapshotView,
+  type StockResetPreview,
+} from "../lib/api";
 import { absoluteTime, bytes, relativeTime } from "../lib/format";
 import { useAsyncData } from "../lib/hooks";
 import { useAction, useApp } from "../state/AppContext";
@@ -221,7 +227,9 @@ function SnapshotList({ agent }: { agent: AgentId }) {
 }
 
 function RecoveryPanel({ agent }: { agent: AgentId }) {
-  const [pending, setPending] = useState<"default" | "original" | null>(null);
+  const [pending, setPending] = useState<"default" | "original" | "stock" | null>(null);
+  const { agents } = useApp();
+  const agentSummary = agents.find((item) => item.agent === agent);
   const action = useAction();
   const {
     data: status,
@@ -229,6 +237,15 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
     loading,
     reload,
   } = useAsyncData(() => call("recovery_status", { agent }), [agent]);
+
+  // What a stock reset would remove. Loaded eagerly rather than on demand so the
+  // warning is available the moment the user reaches for the button, and so the
+  // confirmation dialog never has to open on an empty list it might render as
+  // "nothing will change".
+  const { data: preview } = useAsyncData<StockResetPreview | null>(
+    () => call("preview_stock_reset", { agent }),
+    [agent],
+  );
 
   const undo = () =>
     void action
@@ -292,11 +309,12 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
       <hr className="divider" />
 
       <div className="stack stack--tight">
-        <h2>Restore the default configuration</h2>
+        <h2>Restore what Eclyzer Bridge changed</h2>
         <p className="card__hint">
           Removes the provider Eclyzer Bridge added, returning this agent to its own default.
           Everything else in your configuration — comments, other providers, sandbox settings — is
-          left untouched.
+          left untouched. Settings you configured yourself are kept, even if they look like
+          something Eclyzer Bridge would write.
         </p>
         <div>
           <Button onClick={() => setPending("default")}>Restore default</Button>
@@ -309,7 +327,9 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
         <h2>Restore the original configuration</h2>
         <p className="card__hint">
           {status.hasOriginal
-            ? "Puts back the exact file that existed before Eclyzer Bridge ever touched this agent."
+            ? "Puts back the exact file that existed before Eclyzer Bridge ever touched this agent." +
+              " This is a historical restore, not a factory reset: if that file already contained" +
+              " your own gateway URL, model, or aliases, those values come back."
             : "Available once Eclyzer Bridge has changed this agent at least once."}
         </p>
         <div>
@@ -319,7 +339,40 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
         </div>
       </div>
 
-      {pending && (
+      <hr className="divider" />
+
+      <div className="stack stack--tight">
+        <h2>Reset {agentSummary?.displayName ?? agent} to stock defaults</h2>
+        <p className="card__hint">
+          Removes <strong>every</strong> custom provider and model override — including any you
+          configured yourself before using Eclyzer Bridge — so {agentSummary?.displayName ?? agent}{" "}
+          goes back to its normal built-in configuration. Your login, sessions, MCP configuration,
+          permissions, and unrelated settings are kept.
+        </p>
+        {preview?.blockedByManaged?.length ? (
+          <p className="field__error" role="alert">
+            Your organization manages this setting at {preview.blockedByManaged.join(", ")}. Eclyzer
+            Bridge will not change it, so a reset may not take effect. Ask your administrator.
+          </p>
+        ) : null}
+        <div>
+          <Button variant="danger" onClick={() => setPending("stock")}>
+            Reset to stock defaults…
+          </Button>
+        </div>
+      </div>
+
+      {pending === "stock" ? (
+        <StockResetDialog
+          agent={agent}
+          displayName={agentSummary?.displayName ?? agent}
+          preview={preview}
+          onClose={() => setPending(null)}
+          onReset={reload}
+        />
+      ) : null}
+
+      {pending && pending !== "stock" && (
         <RestoreConfirmDialog
           agent={agent}
           title={
@@ -342,6 +395,118 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
         />
       )}
     </>
+  );
+}
+
+/**
+ * Confirm a stock reset, showing exactly which keys will go.
+ *
+ * The list comes from the backend, computed from the same key lists the reset
+ * uses, so it cannot drift from what actually happens. A generic "this is
+ * destructive" warning would be less useful than naming what disappears.
+ */
+function StockResetDialog({
+  agent,
+  displayName,
+  preview,
+  onClose,
+  onReset,
+}: {
+  agent: AgentId;
+  displayName: string;
+  preview: StockResetPreview | null;
+  onClose: () => void;
+  onReset: () => void;
+}) {
+  const { notify } = useApp();
+  const action = useAction();
+  const [failure, setFailure] = useState<string | null>(null);
+
+  const rows: Array<[string, Array<[string, string]>]> = preview
+    ? [
+        ["Provider and credential", preview.envKeys],
+        ["Model aliases", preview.aliasKeys],
+        ["Model selection", preview.rootKeys],
+      ]
+    : [];
+  const shown = rows.filter(([, entries]) => entries.length > 0);
+
+  const go = () =>
+    void action
+      .run(() => call("reset_to_stock_defaults", { agent }), {
+        onError: (api) => {
+          setFailure(api.hint ? `${api.message} ${api.hint}` : api.message);
+          return true;
+        },
+      })
+      .then((result) => {
+        if (result) {
+          notify(
+            "success",
+            `${displayName} reset to stock defaults.`,
+            result.managedKeys.length > 0
+              ? `Removed ${result.managedKeys.length} setting${result.managedKeys.length === 1 ? "" : "s"}.`
+              : undefined,
+          );
+          onReset();
+          onClose();
+        }
+      });
+
+  return (
+    <Modal title={`Reset ${displayName} to stock defaults?`} onClose={onClose}>
+      <div className="stack stack--tight">
+        <p>
+          This removes custom model and provider overrides,{" "}
+          <strong>including settings not created by Eclyzer Bridge</strong>. Your login, sessions,
+          MCP configuration, permissions, and unrelated settings will be kept.
+        </p>
+
+        {shown.length > 0 ? (
+          <div className="stack stack--tight">
+            <p className="card__hint">These settings will be removed:</p>
+            {shown.map(([label, entries]) => (
+              <div key={label}>
+                <div className="field__label">{label}</div>
+                <ul className="list-plain mono small">
+                  {entries.map(([key, value]) => (
+                    <li key={key}>
+                      {key}
+                      {value ? ` = ${value}` : ""}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="card__hint">
+            No provider or model overrides were found, so this changes nothing. You can still run it
+            to be sure.
+          </p>
+        )}
+
+        <p className="card__hint">
+          A snapshot is taken first, so you can undo this or restore the original configuration
+          afterwards.
+        </p>
+
+        {failure ? (
+          <p className="field__error" role="alert">
+            {failure}
+          </p>
+        ) : null}
+
+        <div className="row row--end">
+          <Button variant="ghost" onClick={onClose} disabled={action.busy}>
+            Cancel
+          </Button>
+          <Button variant="danger" onClick={go} busy={action.busy}>
+            Reset {displayName}
+          </Button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 

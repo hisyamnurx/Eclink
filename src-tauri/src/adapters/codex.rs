@@ -594,6 +594,36 @@ impl AgentAdapter for CodexAdapter {
         })
     }
 
+    fn reset_to_stock_defaults(&self, options: &ApplyOptions<'_>) -> BridgeResult<ApplyOutcome> {
+        let reason = crate::adapters::MutationReason::ResetToStockDefaults;
+        self.mutate(options, &reason, |doc| {
+            // Stronger than `strip_managed`: remove the provider selection and
+            // the model regardless of who set them, so Codex returns to its
+            // built-in default provider.
+            //
+            // Only these keys are touched. `auth.json`, sessions, MCP servers,
+            // `approval_policy`, `sandbox_mode`, and every other unrelated
+            // setting live elsewhere in the file or on disk and survive. Only
+            // Bridge-created provider tables are removed, because deleting a
+            // user's own provider entry would destroy credentials they
+            // configured deliberately.
+            let mut removed = Vec::new();
+            if doc.remove("model_provider") {
+                removed.push("model_provider".to_string());
+            }
+            if doc.remove("model") {
+                removed.push("model".to_string());
+            }
+            for provider_id in doc.provider_ids() {
+                if is_managed_provider_id(&provider_id) {
+                    doc.remove_provider(&provider_id);
+                    removed.push(format!("model_providers.{provider_id}"));
+                }
+            }
+            Ok(removed)
+        })
+    }
+
     fn restore_original(&self, options: &ApplyOptions<'_>) -> BridgeResult<ApplyOutcome> {
         let path = self.locate_config()?;
 
