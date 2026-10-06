@@ -170,6 +170,13 @@ impl ClaudeAdapter {
         Ok(Self::config_dir()?.0.join("settings.json"))
     }
 
+    /// Immutable snapshot of the current settings content, used for the
+    /// external-modification check (PRD §31.3).
+    pub fn current_hash(&self) -> BridgeResult<Option<String>> {
+        let path = self.locate_config()?;
+        crate::config::fs::sha256_file(&path)
+    }
+
     /// Read the organization-managed settings file, if one exists.
     fn read_managed_settings() -> Option<(PathBuf, String)> {
         for candidate in MANAGED_SETTINGS_PATHS {
@@ -1026,5 +1033,319 @@ mod tests {
         assert!(MANAGED_ENV_VARS.contains(&BASE_URL_VAR));
         assert!(MANAGED_ENV_VARS.contains(&AUTH_TOKEN_VAR));
         assert!(MANAGED_ENV_VARS.contains(&MODEL_VAR));
+    }
+
+    // -----------------------------------------------------------------------
+    // End-to-end adapter mutation tests.
+    //
+    // Everything above operates on a bare `ClaudeJson`. These drive the real
+    // `ClaudeAdapter::mutate` sequence against a real settings file, which is the
+    // code that actually rewrites a user's ~/.claude/settings.json.
+    // -----------------------------------------------------------------------
+
+    struct Scratch {
+        _dir: tempfile::TempDir,
+        previous: Option<std::ffi::OsString>,
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var(CLAUDE_CONFIG_DIR_ENV, value) },
+                None => unsafe { std::env::remove_var(CLAUDE_CONFIG_DIR_ENV) },
+            }
+        }
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn scratch() -> (Scratch, BackupManager, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let previous = std::env::var_os(CLAUDE_CONFIG_DIR_ENV);
+        unsafe { std::env::set_var(CLAUDE_CONFIG_DIR_ENV, dir.path()) };
+        let settings = dir.path().join("settings.json");
+        let backups = BackupManager::new(dir.path().join("backups"));
+        (
+            Scratch {
+                _dir: dir,
+                previous,
+            },
+            backups,
+            settings,
+        )
+    }
+
+    fn profile_for_claude() -> Profile {
+        let mut p = Profile::new(
+            "P".to_string(),
+            "DeepSeek".to_string(),
+            "https://api.deepseek.com/anthropic".to_string(),
+            "deepseek-chat".to_string(),
+            vec![AgentId::Claude],
+        );
+        p.advanced = AdvancedOptions {
+            auth_mode: AuthMode::Bearer,
+            ..Default::default()
+        };
+        p
+    }
+
+    fn options<'a>(secret: Option<&'a str>) -> ApplyOptions<'a> {
+        ApplyOptions {
+            secret,
+            helper_path: None,
+            expected_sha256: None,
+            agent_version: None,
+        }
+    }
+
+    #[test]
+    fn applying_a_profile_writes_the_env_block_and_preserves_everything_else() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        // A realistic user file with exactly the settings a careless
+        // implementation would destroy.
+        let original = r#"{
+  "statusLine": { "type": "command", "command": "git status" },
+  "permissions": { "allow": ["Bash(git status)"] },
+  "zzCustom": true,
+  "env": { "MY_FLAG": "1" },
+  "hooks": { "PreToolUse": [] }
+}
+"#;
+        std::fs::write(&settings, original).unwrap();
+
+        let adapter = ClaudeAdapter::new(backups.clone());
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-claude-key")))
+            .expect("apply must succeed");
+
+        let written = std::fs::read_to_string(&settings).unwrap();
+        // Bridge's provider settings are present.
+        assert!(written.contains(BASE_URL_VAR), "{written}");
+        assert!(
+            written.contains("https://api.deepseek.com/anthropic"),
+            "{written}"
+        );
+        assert!(written.contains(AUTH_TOKEN_VAR), "{written}");
+
+        // The user's own settings survive, order included.
+        for key in [
+            "\"statusLine\"",
+            "\"permissions\"",
+            "\"zzCustom\"",
+            "\"env\"",
+            "\"hooks\"",
+            "\"MY_FLAG\"",
+        ] {
+            assert!(written.contains(key), "lost {key}: {written}");
+        }
+        let status = written.find("\"statusLine\"").unwrap();
+        let hooks = written.find("\"hooks\"").unwrap();
+        assert!(status < hooks, "key order changed: {written}");
+
+        // The immutable original holds the pre-Bridge bytes exactly.
+        let (_meta, saved) = backups
+            .read_original(AgentId::Claude.as_str())
+            .unwrap()
+            .expect("an original backup must exist");
+        assert_eq!(saved, original);
+    }
+
+    #[test]
+    fn the_claude_key_is_written_only_to_the_settings_file() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, "{}\n").unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-claude-secret")))
+            .expect("apply must succeed");
+
+        let written = std::fs::read_to_string(&settings).unwrap();
+        // Claude Code has no helper mechanism, so the key does go in this file -
+        // and nowhere else. Assert it is present exactly once.
+        assert_eq!(
+            written.matches("sk-claude-secret").count(),
+            1,
+            "the key must be written exactly once: {written}"
+        );
+    }
+
+    #[test]
+    fn applying_to_an_invalid_settings_file_is_a_hard_stop() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        let broken = "{ \"env\": { \"A\": }, }\n";
+        std::fs::write(&settings, broken).unwrap();
+
+        let adapter = ClaudeAdapter::new(backups.clone());
+        let err = adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect_err("invalid JSON must block the write");
+
+        assert_eq!(err.kind, crate::error::ErrorKind::ConfigInvalid, "{err:?}");
+        assert_eq!(
+            std::fs::read_to_string(&settings).unwrap(),
+            broken,
+            "the file must be untouched"
+        );
+        assert!(!backups.has_original(AgentId::Claude.as_str()));
+    }
+
+    #[test]
+    fn an_external_change_aborts_the_claude_write() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, "{}\n").unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        let before = adapter.current_hash().unwrap().unwrap();
+        let external = "{ \"edited\": true }\n";
+        std::fs::write(&settings, external).unwrap();
+
+        let stale = ApplyOptions {
+            secret: Some("sk-test"),
+            helper_path: None,
+            expected_sha256: Some(before),
+            agent_version: None,
+        };
+        let err = adapter
+            .apply_profile(&profile_for_claude(), &stale)
+            .expect_err("an external edit must abort");
+
+        assert_eq!(err.kind, crate::error::ErrorKind::ConfigConflict, "{err:?}");
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), external);
+    }
+
+    #[test]
+    fn restore_default_removes_only_bridge_env_entries() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(
+            &settings,
+            "{\n  \"env\": { \"MY_FLAG\": \"1\" },\n  \"permissions\": { \"allow\": [] }\n}\n",
+        )
+        .unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+        adapter
+            .restore_default(&options(None))
+            .expect("restore default must succeed");
+
+        let restored = std::fs::read_to_string(&settings).unwrap();
+        assert!(!restored.contains(BASE_URL_VAR), "{restored}");
+        assert!(!restored.contains(AUTH_TOKEN_VAR), "{restored}");
+        assert!(!restored.contains(MODEL_VAR), "{restored}");
+        // The user's own env flag and unrelated settings survive (PRD §30.2).
+        assert!(restored.contains("\"MY_FLAG\""), "{restored}");
+        assert!(restored.contains("\"permissions\""), "{restored}");
+        // No empty env object is left behind.
+        assert!(!restored.contains("\"env\": {}"), "{restored}");
+    }
+
+    #[test]
+    fn restore_default_preserves_mcp_and_session_state() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (scratch, backups, settings) = scratch();
+        // Claude Code keeps sign-in and MCP state alongside settings.
+        let creds = scratch._dir.path().join(".credentials.json");
+        std::fs::write(&creds, r#"{"token":"session"}"#).unwrap();
+        let mcp = scratch._dir.path().join("mcp.json");
+        std::fs::write(&mcp, r#"{"servers":{"x":{}}}"#).unwrap();
+        std::fs::write(
+            &settings,
+            "{\n  \"enabledPlugins\": { \"foo@bar\": true }\n}\n",
+        )
+        .unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+        adapter
+            .restore_default(&options(None))
+            .expect("restore default must succeed");
+
+        // PRD §30.2: never log out, never delete the sign-in session, never
+        // delete MCP state.
+        assert!(creds.exists(), "the sign-in session must not be deleted");
+        assert!(mcp.exists(), "MCP state must not be deleted");
+        assert!(std::fs::read_to_string(&settings)
+            .unwrap()
+            .contains("enabledPlugins"));
+    }
+
+    #[test]
+    fn restore_original_restores_the_pre_bridge_settings_byte_for_byte() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        let original = "{\n  \"statusLine\": { \"type\": \"command\" }\n}\n";
+        std::fs::write(&settings, original).unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+        adapter
+            .restore_original(&options(None))
+            .expect("restore original must succeed");
+
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+    }
+
+    #[test]
+    fn undo_returns_the_claude_settings_to_their_previous_state() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        let original = "{\n  \"zzz\": 1\n}\n";
+        std::fs::write(&settings, original).unwrap();
+
+        let adapter = ClaudeAdapter::new(backups.clone());
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let snapshot = backups
+            .snapshots()
+            .latest(AgentId::Claude.as_str())
+            .unwrap()
+            .expect("a snapshot exists");
+        adapter
+            .restore_snapshot(&snapshot, &options(None))
+            .expect("restore snapshot must succeed");
+
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), original);
+        // And the restore was itself snapshotted, so it can be undone.
+        assert!(backups.snapshot_count(AgentId::Claude.as_str()) >= 2);
+    }
+
+    #[test]
+    fn a_missing_settings_file_is_created_without_a_backup_of_nothing() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        assert!(!settings.exists());
+
+        let adapter = ClaudeAdapter::new(backups.clone());
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+        assert!(settings.exists(), "the settings file must be created");
+
+        // The original recorded that no file existed, so restoring it removes
+        // the file rather than leaving an empty one behind.
+        let (meta, content) = backups
+            .read_original(AgentId::Claude.as_str())
+            .unwrap()
+            .expect("an original is recorded even when the file was absent");
+        assert!(
+            !meta.existed,
+            "the original must record the file was absent"
+        );
+        assert!(content.is_empty(), "{content:?}");
     }
 }

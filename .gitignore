@@ -68,3 +68,6 @@ desktop.ini
 *.tmp
 *.log
 !.github/**/*.yml
+
+# Scratch file used to pass a multi-line commit message to git
+commitmsg.txt
