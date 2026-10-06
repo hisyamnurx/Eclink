@@ -77,3 +77,7 @@ cmsg2.txt
 cmsg3.txt
 cmsg4.txt
 cmsg5.txt
+
+# Installer hasil build, jangan di-commit (besar, dan di-generate ulang)
+Eclyzer-Bridge-Setup-*.exe
+Eclyzer-Bridge-Setup-*.exe.sig
