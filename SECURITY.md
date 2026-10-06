@@ -108,9 +108,29 @@ Windows in this version.
 
 `profiles.json` stores an opaque `secretRef`, never a key. The key is not
 written to `app.json`, not written to any backup or snapshot, not written to any
-log line, and not included in the diagnostics report. Backups capture agent
-configuration files only, and those files do not contain the key — which is what
-makes it safe to back them up unconditionally.
+log line, and not included in the diagnostics report.
+
+One case needs stating precisely, because the obvious summary of it would be
+wrong. It is **not** true that keys never appear in agent config files:
+
+- **Codex** uses the bundled credential helper, so the key is resolved at launch
+  and never enters `config.toml`.
+- **Claude Code** has no equivalent mechanism, so the gateway key **is** written
+  into its `settings.json` as `ANTHROPIC_AUTH_TOKEN` by design. That file is
+  permission-hardened to the owner after every write.
+
+Because the backup system copies config files, and because a user who already
+uses a gateway has a key in that file before the app first runs, both the
+original backup and every snapshot run the payload through a targeted rule that
+**empties the value of a known credential key** while leaving the file valid and
+restorable. This is why backups can be taken unconditionally: no credential
+value is ever stored in the backup tree, and a restored file is still a valid
+config the agent can read.
+
+The general-purpose log redactor and this backup rule are deliberately different
+mechanisms. The log redactor is heuristic and documented to have gaps; the backup
+rule is a fixed list of the exact keys the app itself writes, so it cannot miss
+the one case that matters here.
 
 ### Codex: a credential-helper command instead of a key in the config
 

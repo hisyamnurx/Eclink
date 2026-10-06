@@ -8,8 +8,17 @@
 //! * **History** — an append-only local ledger of what happened, with a pointer
 //!   to the snapshot that can undo it.
 //!
-//! Backups store the raw agent config file only. Secrets are never included
-//! because they never live in those files.
+//! Backups store the agent config file, with any credential *values* blanked
+//! out first.
+//!
+//! It is not true that keys never live in these config files: Codex uses the
+//! credential helper, but Claude Code has no such mechanism, so its gateway key
+//! is written into `settings.json` by design. Because the backup system copies
+//! config files verbatim, that key would otherwise be duplicated into the
+//! snapshot tree and the original backup on every mutation. Both writers
+//! therefore run the payload through
+//! [`crate::diagnostics::redact::strip_credential_values`], which empties the
+//! value of a known credential key while leaving the file valid and restorable.
 
 pub mod history;
 pub mod snapshots;
@@ -106,9 +115,17 @@ impl BackupManager {
         let raw = read_to_string_opt(config_path)?;
         let (content, sha256, bytes, existed) = match raw {
             Some(text) => {
+                // A user who already configures a gateway has the credential in
+                // the config file *before* Bridge's first run, so the original
+                // backup would otherwise capture it. Blank credential values for
+                // the same reason as in the snapshot store: the backup must
+                // never hold a second copy of a key.
+                let stored = crate::diagnostics::redact::strip_credential_values(&text);
+                // The hash and size still describe the file as it really was, so
+                // the backup metadata stays an accurate record of the original.
                 let bytes = text.len() as u64;
                 let hash = sha256_hex(text.as_bytes());
-                (text, hash, bytes, true)
+                (stored, hash, bytes, true)
             }
             // The agent config did not exist yet. Record that fact explicitly so
             // restore-original can remove a file Bridge created rather than

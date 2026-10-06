@@ -1087,8 +1087,10 @@ function AdvancedEditor({
           </Button>
         </div>
         <div className="field__hint">
-          A value that looks like a credential is stored encrypted, like your API key.
-          Authorization, x-api-key, and proxy-authorization cannot be overridden here.
+          Header values are stored in plain text in your profile and written into the agent's own
+          configuration file. Put your gateway credential in the API key field instead, where it is
+          sealed with Windows DPAPI. Authorization, x-api-key, and proxy-authorization cannot be
+          overridden here.
         </div>
       </div>
 

@@ -135,6 +135,61 @@ impl Patterns {
     }
 }
 
+/// Environment / config keys whose *value* is a live credential that Bridge
+/// itself writes into an agent config file.
+///
+/// Claude Code has no credential-helper mechanism, so its gateway key is written
+/// into `settings.json` as `ANTHROPIC_AUTH_TOKEN` (see the Claude adapter). That
+/// file is permission-hardened, but the backup system copies config files
+/// verbatim — so without this list the key would be duplicated into the snapshot
+/// tree and the original backup on every subsequent mutation.
+///
+/// This is deliberately a *named* list rather than a heuristic: the backup must
+/// stay restorable, so only values known to be credentials are replaced, and
+/// they are replaced with an empty string rather than a marker so a restored
+/// file is still valid JSON/TOML that the agent can read.
+pub const CREDENTIAL_VALUE_KEYS: [&str; 3] = [
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+];
+
+/// Blank out the values of every key in [`CREDENTIAL_VALUE_KEYS`], preserving the
+/// surrounding structure and formatting so the result is still a valid config
+/// file.
+///
+/// Values are matched in both quoted-JSON (`"KEY": "value"`) and TOML
+/// (`KEY = "value"`) form, which is what the two agents use.
+///
+/// This is a *targeted* replacement, not the general redactor: it must not
+/// mangle unrelated content, because the output is written to disk as a backup
+/// the user may restore.
+pub fn strip_credential_values(input: &str) -> String {
+    let mut out = input.to_string();
+    for key in CREDENTIAL_VALUE_KEYS {
+        // `("KEY"\s*:\s*)"value"` for JSON, `(KEY\s*=\s*)"value"` for TOML.
+        // The key is escaped so a key containing regex metacharacters cannot
+        // change the pattern's meaning.
+        let pattern = format!(
+            r#"(?i)(["']?{}\b["']?\s*[:=]\s*)(["'])(?:[^"'\\]|\\.)*(["'])"#,
+            regex::escape(key)
+        );
+        let Ok(re) = Regex::new(&pattern) else {
+            continue;
+        };
+        out = re
+            .replace_all(&out, |caps: &regex::Captures| {
+                // Re-emit the key, separator and both quotes, with the value
+                // emptied. A `null` would be more explicit but would change the
+                // file's shape in a way a restore would surface to the agent as
+                // a type error.
+                format!("{}{}{}", &caps[1], &caps[2], &caps[3])
+            })
+            .into_owned();
+    }
+    out
+}
+
 /// Redact every secret-shaped substring in `input`.
 pub fn redact_text(input: &str) -> String {
     let p = patterns();
@@ -400,5 +455,88 @@ mod tests {
             out.contains("abc123"),
             "the documented limitation no longer holds; update the module docs"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // strip_credential_values: the targeted rule used for backup payloads.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn strips_a_claude_auth_token_written_as_json() {
+        // This is the exact shape the Claude adapter writes, and the shape the
+        // general redactor does NOT catch (see the gap test above): the key is
+        // ANTHROPIC_AUTH_TOKEN, which is not in the generic key list, and a real
+        // gateway token may be short and unprefixed.
+        let input = r#"{
+  "env": {
+    "ANTHROPIC_BASE_URL": "https://gw.example.com",
+    "ANTHROPIC_AUTH_TOKEN": "gw-live-abc123"
+  }
+}"#;
+        let out = strip_credential_values(input);
+
+        assert!(!out.contains("gw-live-abc123"), "the key survived: {out}");
+        // The key name and the sibling entry must remain, so the file is still a
+        // usable, restorable config.
+        assert!(out.contains("ANTHROPIC_AUTH_TOKEN"), "{out}");
+        assert!(out.contains("https://gw.example.com"), "{out}");
+        // And it must still be valid JSON.
+        let parsed: serde_json::Value = serde_json::from_str(&out).expect("still valid JSON");
+        assert_eq!(
+            parsed["env"]["ANTHROPIC_AUTH_TOKEN"], "",
+            "the value must be emptied, not removed"
+        );
+    }
+
+    #[test]
+    fn strips_a_credential_written_as_toml() {
+        let input = "OPENAI_API_KEY = \"sk-live-xyz\"\nmodel = \"gpt-5\"\n";
+        let out = strip_credential_values(input);
+        assert!(!out.contains("sk-live-xyz"), "{out}");
+        assert!(out.contains("OPENAI_API_KEY"), "{out}");
+        assert!(
+            out.contains("model = \"gpt-5\""),
+            "unrelated keys survive: {out}"
+        );
+    }
+
+    #[test]
+    fn strip_preserves_unrelated_content_and_is_idempotent() {
+        let input = r#"{
+  "statusLine": { "type": "command", "command": "git status" },
+  "env": { "ANTHROPIC_AUTH_TOKEN": "secret-value", "MY_FLAG": "1" },
+  "permissions": { "allow": ["Bash(git status)"] }
+}"#;
+        let once = strip_credential_values(input);
+        let twice = strip_credential_values(&once);
+
+        assert_eq!(once, twice, "stripping must be idempotent");
+        assert!(!once.contains("secret-value"), "{once}");
+        // The user's own data must be untouched.
+        assert!(once.contains("git status"), "{once}");
+        assert!(once.contains("\"MY_FLAG\": \"1\""), "{once}");
+        assert!(once.contains("Bash(git status)"), "{once}");
+    }
+
+    #[test]
+    fn strip_handles_a_single_quoted_value() {
+        let out = strip_credential_values("ANTHROPIC_API_KEY: 'sk-live-single'");
+        assert!(!out.contains("sk-live-single"), "{out}");
+    }
+
+    #[test]
+    fn strip_leaves_a_file_without_credentials_byte_identical() {
+        // The backup must be a faithful copy when there is nothing to remove;
+        // otherwise every restore would show spurious differences.
+        let input = "model = \"gpt-5\"\napproval_policy = \"on-request\"\n\n[model_providers.mine]\nbase_url = \"https://x/v1\"\n";
+        assert_eq!(strip_credential_values(input), input);
+    }
+
+    #[test]
+    fn strip_does_not_touch_a_key_that_is_not_a_credential() {
+        // `ANTHROPIC_BASE_URL` is a URL, not a secret, and must survive so the
+        // restored config still points at the right endpoint.
+        let input = r#"{ "env": { "ANTHROPIC_BASE_URL": "https://gw.example.com" } }"#;
+        assert_eq!(strip_credential_values(input), input);
     }
 }

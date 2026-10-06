@@ -1348,4 +1348,72 @@ mod tests {
         );
         assert!(content.is_empty(), "{content:?}");
     }
+
+    /// Every file under `root`, as (path, contents) pairs.
+    fn all_files_under(root: &std::path::Path) -> Vec<(String, String)> {
+        let mut found = Vec::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if let Ok(text) = std::fs::read_to_string(&path) {
+                    found.push((path.display().to_string(), text));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn the_api_key_never_ends_up_in_the_backup_tree() {
+        // Claude Code has no credential-helper mechanism, so the gateway key is
+        // written into settings.json by design. That file is permission
+        // hardened, but the backup tree is a *second* copy, in a directory the
+        // app owns and enumerates.
+        //
+        // The original backup is taken before the first write, so it is clean.
+        // The danger is the *second* mutation: the snapshot taken before it
+        // copies a settings.json that already contains the key.
+        //
+        // This is the case the backup module doc used to wave away with
+        // "secrets never live in those files" - true for Codex, false for Claude.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        std::fs::write(&settings, "{\n  \"zzz\": 1\n}\n").unwrap();
+
+        let adapter = ClaudeAdapter::new(backups.clone());
+        // First activation writes the key.
+        adapter
+            .apply_profile(
+                &profile_for_claude(),
+                &options(Some("sk-ant-leak-canary-0001")),
+            )
+            .expect("first apply must succeed");
+        // Second activation snapshots the file that now holds it.
+        adapter
+            .apply_profile(
+                &profile_for_claude(),
+                &options(Some("sk-ant-leak-canary-0002")),
+            )
+            .expect("second apply must succeed");
+
+        let offenders: Vec<String> = all_files_under(backups.root())
+            .into_iter()
+            .filter(|(_, text)| {
+                text.contains("sk-ant-leak-canary-0001") || text.contains("sk-ant-leak-canary-0002")
+            })
+            .map(|(path, _)| path)
+            .collect();
+
+        assert!(
+            offenders.is_empty(),
+            "the API key was copied into the backup tree at: {}",
+            offenders.join(", ")
+        );
+    }
 }

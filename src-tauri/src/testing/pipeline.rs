@@ -149,19 +149,11 @@ pub fn build_target(profile: &Profile, secret: Secret) -> BridgeResult<ProbeTarg
         .with_details("insecure_endpoint"));
     }
 
-    target.extra_headers = profile
-        .advanced
-        .headers
-        .iter()
-        .filter(|pair| !pair.name.trim().is_empty())
-        // A user-supplied header must never be able to override the credential;
-        // that would silently send the key somewhere unexpected.
-        .filter(|pair| {
-            let name = pair.name.trim().to_ascii_lowercase();
-            name != "authorization" && name != "x-api-key" && name != "proxy-authorization"
-        })
-        .map(|pair| (pair.name.trim().to_string(), pair.value.clone()))
-        .collect();
+    // Reserved headers are dropped by `profiles::user_headers`, which the Codex
+    // adapter also uses. Sharing one function matters: a user-supplied header
+    // must never override the credential, and a filter that exists in only one
+    // caller is a filter the other caller forgets.
+    target.extra_headers = crate::profiles::user_headers(&profile.advanced);
     target.extra_query = profile
         .advanced
         .query_params

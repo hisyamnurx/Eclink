@@ -166,6 +166,35 @@ pub struct HeaderPair {
     pub value: String,
 }
 
+/// Headers a user may never override from the profile editor.
+///
+/// These carry the credential. Allowing a profile to set them would let a
+/// profile silently replace the authenticated key — or point it at a host the
+/// user did not choose. The check is applied wherever user headers are consumed,
+/// not only in one code path, because a filter that lives in one caller is a
+/// filter the next caller forgets.
+pub const RESERVED_HEADERS: [&str; 3] = ["authorization", "x-api-key", "proxy-authorization"];
+
+/// Whether `name` is a credential-bearing header the user may not override.
+pub fn is_reserved_header(name: &str) -> bool {
+    let lowered = name.trim().to_ascii_lowercase();
+    RESERVED_HEADERS.contains(&lowered.as_str())
+}
+
+/// The user's extra headers, with blank names and reserved names removed.
+///
+/// Returns owned `(name, value)` pairs with the name trimmed, which is the shape
+/// both the request pipeline and the Codex provider spec need.
+pub fn user_headers(options: &AdvancedOptions) -> Vec<(String, String)> {
+    options
+        .headers
+        .iter()
+        .filter(|pair| !pair.name.trim().is_empty())
+        .filter(|pair| !is_reserved_header(&pair.name))
+        .map(|pair| (pair.name.trim().to_string(), pair.value.clone()))
+        .collect()
+}
+
 /// A stored provider profile.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

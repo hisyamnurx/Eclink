@@ -1,4 +1,4 @@
-//! OpenAI Codex adapter (PRD §16).
+//! OpenAI Codex adapter (PRD Â§16).
 //!
 //! ## Official baseline this implements (verified against the current Codex
 //! configuration reference)
@@ -16,7 +16,7 @@
 //!
 //! Bridge therefore writes an `[auth]` command pointing at
 //! `eclyzer-bridge-helper.exe` so the API key never lands in `config.toml`
-//! (PRD §13.4, §16.5), and it never writes a bearer token inline.
+//! (PRD Â§13.4, Â§16.5), and it never writes a bearer token inline.
 
 use std::path::{Path, PathBuf};
 
@@ -35,7 +35,7 @@ use crate::MANAGED_PROVIDER_PREFIX;
 /// Environment variable Codex honours for its state directory.
 pub const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
-/// Official installation guide, offered only as a link (PRD §33).
+/// Official installation guide, offered only as a link (PRD Â§33).
 pub const INSTALL_GUIDE_URL: &str = "https://developers.openai.com/codex/cli/";
 
 /// Codex version that first supported `[model_providers.<id>.auth]`.
@@ -70,7 +70,7 @@ impl CodexAdapter {
     }
 
     /// Immutable snapshot of the current config content, used for the
-    /// external-modification check (PRD §31.3).
+    /// external-modification check (PRD Â§31.3).
     pub fn current_hash(&self) -> BridgeResult<Option<String>> {
         let path = self.locate_config()?;
         crate::config::fs::sha256_file(&path)
@@ -90,25 +90,33 @@ impl CodexAdapter {
         helper_command: Option<&'a str>,
         use_auth_command: bool,
         env_key: Option<&'a str>,
+        headers: &'a [(String, String)],
     ) -> ProviderSpec<'a> {
-        let headers: Vec<(&str, &str)> = profile
-            .advanced
-            .headers
+        // The reserved-header filter is applied here, not only in the test
+        // pipeline, because this is the path that writes headers into the user's
+        // config.toml. The profile editor tells the user those three headers
+        // cannot be overridden; if the filter lived only in the pipeline, that
+        // promise would be false for the file that actually persists.
+        //
+        // `headers` must outlive the returned spec, so the caller passes storage
+        // it owns rather than this function building a temporary.
+        let headers: Vec<(&str, &str)> = headers
             .iter()
-            .map(|pair| (pair.name.as_str(), pair.value.as_str()))
+            .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
         let query_params: Vec<(&str, &str)> = profile
             .advanced
             .query_params
             .iter()
-            .map(|pair| (pair.name.as_str(), pair.value.as_str()))
+            .filter(|pair| !pair.name.trim().is_empty())
+            .map(|pair| (pair.name.trim(), pair.value.as_str()))
             .collect();
 
         // The helper command must outlive the spec; the caller owns the String.
         let auth_command = match (use_auth_command, helper_command) {
             (true, Some(command)) => Some(AuthCommand {
                 // Written as a single TOML string; never concatenated into a
-                // command line (PRD §63).
+                // command line (PRD Â§63).
                 command,
                 args: vec!["secret", "resolve", profile.id.as_str()],
                 timeout_ms: Some(5000),
@@ -143,8 +151,8 @@ impl CodexAdapter {
     /// * `model_provider` is Bridge-owned when its value carries the Bridge
     ///   provider prefix;
     /// * `model` is Bridge-owned only when Bridge's own `model_provider`
-    ///   selection is currently active — a `model` that a user set for their own
-    ///   provider must survive (PRD §16.6, §17);
+    ///   selection is currently active â€” a `model` that a user set for their own
+    ///   provider must survive (PRD Â§16.6, Â§17);
     /// * provider entries are Bridge-owned when their ID carries the prefix.
     ///
     /// A user's own providers, model choice, MCP servers, sandbox settings, and
@@ -178,7 +186,7 @@ impl CodexAdapter {
         removed
     }
 
-    /// Perform the guarded mutation sequence (PRD §31.1).
+    /// Perform the guarded mutation sequence (PRD Â§31.1).
     fn mutate<F>(
         &self,
         options: &ApplyOptions<'_>,
@@ -190,14 +198,14 @@ impl CodexAdapter {
     {
         let path = self.locate_config()?;
 
-        // Serialize mutations per agent (PRD §48).
+        // Serialize mutations per agent (PRD Â§48).
         let _lock =
             crate::config::fs::FileLock::acquire(self.backups.root().join("codex-config.lock"))?;
 
         // 1. read raw
         let raw = crate::config::fs::read_to_string_opt(&path)?;
 
-        // 2. parse (invalid TOML is a hard stop, PRD §31.2)
+        // 2. parse (invalid TOML is a hard stop, PRD Â§31.2)
         let mut doc = CodexToml::parse_or_empty(raw.as_deref())?;
 
         // 3. validate existing content is safe to modify
@@ -214,7 +222,7 @@ impl CodexAdapter {
         };
         self.validate_config(&snapshot)?;
 
-        // 4. external-modification guard (PRD §31.3, §48)
+        // 4. external-modification guard (PRD Â§31.3, Â§48)
         if let Some(expected) = &options.expected_sha256 {
             let actual = snapshot.sha256.clone().unwrap_or_else(|| sha256_hex(b""));
             if &actual != expected {
@@ -225,12 +233,12 @@ impl CodexAdapter {
             }
         }
 
-        // 5. immutable original backup, once per agent (PRD §25)
+        // 5. immutable original backup, once per agent (PRD Â§25)
         let created_original_backup =
             self.backups
                 .ensure_original(AgentId::Codex.as_str(), &path, &[])?;
 
-        // 6. snapshot immediately before the change (PRD §26)
+        // 6. snapshot immediately before the change (PRD Â§26)
         let snap = self.backups.create_snapshot(
             AgentId::Codex.as_str(),
             &path,
@@ -259,7 +267,7 @@ impl CodexAdapter {
         let verify = crate::config::fs::read_to_string_opt(&path)?.unwrap_or_default();
         if verify != rendered {
             // Roll back from the snapshot we just took so the user is never left
-            // with a half-applied config (PRD §24).
+            // with a half-applied config (PRD Â§24).
             let _ = write_atomic(&path, snap.content.as_bytes());
             return Err(BridgeError::internal(
                 "Eclyzer Bridge could not verify the updated Codex configuration.",
@@ -294,7 +302,7 @@ impl CodexAdapter {
             .join("ownership.json")
     }
 
-    /// Read the metadata describing which keys Bridge owns (PRD §49).
+    /// Read the metadata describing which keys Bridge owns (PRD Â§49).
     fn read_ownership_keys(&self) -> BridgeResult<Vec<String>> {
         let Some(raw) = crate::config::fs::read_to_string_opt(&self.ownership_path())? else {
             return Ok(Vec::new());
@@ -470,7 +478,7 @@ impl AgentAdapter for CodexAdapter {
         // Codex admin-enforced requirements live alongside config as
         // `requirements.toml`; a managed `model_provider` there would win over
         // user config. Bridge detects that and refuses rather than pretending
-        // the activation worked (PRD §18 policy, §21).
+        // the activation worked (PRD Â§18 policy, Â§21).
         let (config_dir, _) = Self::config_dir()?;
         let requirements = config_dir.join("requirements.toml");
         let Some(raw) = crate::config::fs::read_to_string_opt(&requirements)? else {
@@ -554,6 +562,10 @@ impl AgentAdapter for CodexAdapter {
             .map(|path| path.display().to_string());
         let base_url = crate::profiles::normalize_base_url(&profile.base_url);
         let provider_id_for_keys = provider_id.clone();
+        // Filtered once, then owned for the duration of the closure. Reserved
+        // headers are dropped here so they can never be written into the user's
+        // config.toml, matching what the profile editor tells the user.
+        let headers = crate::profiles::user_headers(&profile.advanced);
 
         self.mutate(options, &reason, move |doc| {
             doc.upsert_provider(
@@ -564,6 +576,7 @@ impl AgentAdapter for CodexAdapter {
                     helper_command.as_deref(),
                     use_auth_command,
                     env_key,
+                    &headers,
                 ),
             );
             doc.set_str("model_provider", &provider_id);
@@ -576,7 +589,7 @@ impl AgentAdapter for CodexAdapter {
         let reason = crate::adapters::MutationReason::RestoreDefault;
         self.mutate(options, &reason, |doc| {
             // Remove only Bridge-owned keys: never `auth.json`, never sessions,
-            // never the user's own providers (PRD §16.6, §17).
+            // never the user's own providers (PRD Â§16.6, Â§17).
             Ok(Self::strip_managed(doc))
         })
     }
@@ -596,7 +609,7 @@ impl AgentAdapter for CodexAdapter {
             })?;
 
         // Snapshot the current state first so this restore is itself reversible
-        // (PRD §29).
+        // (PRD Â§29).
         let snap = self.backups.create_snapshot(
             AgentId::Codex.as_str(),
             &path,
@@ -689,7 +702,7 @@ impl AgentAdapter for CodexAdapter {
     fn launch_env(&self, secret: Option<&str>) -> BridgeResult<Vec<(String, String)>> {
         // Only needed when Bridge had to fall back from the credential helper.
         // The variable is set for the launched process tree and never persisted
-        // to the user's global environment (PRD §32.3).
+        // to the user's global environment (PRD Â§32.3).
         let Ok(snapshot) = self.read_config() else {
             return Ok(Vec::new());
         };
@@ -863,7 +876,7 @@ persistence = "none"
 
     #[test]
     fn provider_spec_uses_responses_wire_api() {
-        // PRD §16.4: custom Codex providers are Responses-API based.
+        // PRD Â§16.4: custom Codex providers are Responses-API based.
         let profile = Profile::new(
             "P".into(),
             "DeepSeek".into(),
@@ -871,8 +884,14 @@ persistence = "none"
             "deepseek-chat".into(),
             vec![AgentId::Codex],
         );
-        let spec =
-            CodexAdapter::provider_spec(&profile, "https://api.deepseek.com/v1", None, false, None);
+        let spec = CodexAdapter::provider_spec(
+            &profile,
+            "https://api.deepseek.com/v1",
+            None,
+            false,
+            None,
+            &[],
+        );
         assert_eq!(spec.wire_api, "responses");
         // The trailing slash must be trimmed so the URL is canonical.
         assert_eq!(spec.base_url, "https://api.deepseek.com/v1");
@@ -888,7 +907,8 @@ persistence = "none"
             vec![AgentId::Codex],
         );
         let helper = r"C:\Program Files\Eclyzer Bridge\eclyzer-bridge-helper.exe";
-        let spec = CodexAdapter::provider_spec(&profile, "https://x/v1", Some(helper), true, None);
+        let spec =
+            CodexAdapter::provider_spec(&profile, "https://x/v1", Some(helper), true, None, &[]);
 
         let auth = spec.auth_command.expect("auth command expected");
         assert_eq!(
@@ -915,14 +935,14 @@ persistence = "none"
         let mut doc = CodexToml::parse("").unwrap();
         doc.upsert_provider(
             "eclyzer_bridge_p_1",
-            &CodexAdapter::provider_spec(&profile, "https://x/v1", Some(helper), true, None),
+            &CodexAdapter::provider_spec(&profile, "https://x/v1", Some(helper), true, None, &[]),
         );
         let out = doc.to_string_preserving();
         assert!(!out.contains("experimental_bearer_token"), "{out}");
         assert!(!out.contains("env_key"), "{out}");
         // Pin the exact table header. The previous assertion was
         // `out.contains("auth")`, three letters that are satisfied by `author`,
-        // `authored`, or any unrelated key — so a typo in the token-removal key
+        // `authored`, or any unrelated key â€” so a typo in the token-removal key
         // name would have slipped through while a user's inlined key stayed in
         // config.toml.
         assert!(
@@ -954,6 +974,7 @@ persistence = "none"
             None,
             false,
             Some(FALLBACK_ENV_KEY),
+            &[],
         );
         assert_eq!(spec.env_key, Some(FALLBACK_ENV_KEY));
         assert!(spec.auth_command.is_none());
@@ -1080,6 +1101,60 @@ base_url = "https://old.example.com"
             expected_sha256: None,
             agent_version: None,
         }
+    }
+
+    #[test]
+    fn reserved_headers_never_reach_the_codex_config_file() {
+        // The profile editor tells the user that Authorization, x-api-key and
+        // proxy-authorization cannot be overridden. The filter used to live only
+        // in the test pipeline, so this path - the one that writes the user's
+        // config.toml - would silently accept them.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, config) = scratch();
+        std::fs::write(&config, "model = \"m\"\n").unwrap();
+
+        let mut profile = profile_for_codex();
+        profile.advanced.headers = vec![
+            crate::profiles::HeaderPair {
+                name: "Authorization".into(),
+                value: "Bearer sk-attacker".into(),
+            },
+            crate::profiles::HeaderPair {
+                name: "x-api-key".into(),
+                value: "sk-attacker".into(),
+            },
+            crate::profiles::HeaderPair {
+                name: "PROXY-AUTHORIZATION".into(),
+                value: "Basic sk-attacker".into(),
+            },
+            // A non-reserved header must still be written, so the test cannot
+            // pass merely by dropping every header.
+            crate::profiles::HeaderPair {
+                name: "X-Tenant".into(),
+                value: "acme".into(),
+            },
+        ];
+
+        let adapter = CodexAdapter::new(backups);
+        adapter
+            .apply_profile(&profile, &apply_options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let written = std::fs::read_to_string(&config).unwrap();
+        assert!(
+            written.contains("X-Tenant"),
+            "an ordinary header must survive: {written}"
+        );
+        for reserved in ["Authorization", "x-api-key", "PROXY-AUTHORIZATION"] {
+            assert!(
+                !written.to_lowercase().contains(&reserved.to_lowercase()),
+                "the reserved header {reserved} reached config.toml: {written}"
+            );
+        }
+        assert!(
+            !written.contains("sk-attacker"),
+            "an overriding credential reached config.toml: {written}"
+        );
     }
 
     #[test]
@@ -1212,7 +1287,7 @@ base_url = "https://old.example.com"
             .restore_default(&apply_options(None))
             .expect("restore default must succeed");
 
-        // PRD §16.6, §30.1: Restore Default removes only Bridge-owned
+        // PRD Â§16.6, Â§30.1: Restore Default removes only Bridge-owned
         // provider/model overrides. It must not touch anything else, and in
         // particular must not delete the user's own model choice, which Bridge
         // never owned in this state.
@@ -1247,7 +1322,7 @@ base_url = "https://old.example.com"
         assert!(!restored.contains("eclyzer_bridge"), "{restored}");
         assert!(!restored.contains("model_provider"), "{restored}");
         assert!(!restored.contains("deepseek-chat"), "{restored}");
-        // ...and the unrelated user setting survives (PRD §16.6, §30.1).
+        // ...and the unrelated user setting survives (PRD Â§16.6, Â§30.1).
         assert!(
             restored.contains("approval_policy = \"on-request\""),
             "{restored}"
@@ -1278,7 +1353,7 @@ base_url = "https://old.example.com"
             .restore_default(&apply_options(None))
             .expect("restore default must succeed");
 
-        // PRD §16.6, §30.1 and the release checklist: never delete auth.json,
+        // PRD Â§16.6, Â§30.1 and the release checklist: never delete auth.json,
         // never log the user out, never delete sessions.
         assert_eq!(
             std::fs::read_to_string(&auth).unwrap(),

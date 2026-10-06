@@ -41,6 +41,12 @@ impl SnapshotStore {
         managed_keys: &[String],
     ) -> BridgeResult<Snapshot> {
         let content = read_to_string_opt(config_path)?.unwrap_or_default();
+        // Claude Code has no credential-helper mechanism, so its gateway key is
+        // written into settings.json by design. The backup must not keep a second
+        // copy of it, so credential values are blanked before the payload is
+        // stored. Everything else is copied verbatim, and the result is still a
+        // valid config file, so a restore works.
+        let content = crate::diagnostics::redact::strip_credential_values(&content);
 
         let id = uuid::Uuid::new_v4().to_string();
         let created_at = chrono::Local::now().to_rfc3339();

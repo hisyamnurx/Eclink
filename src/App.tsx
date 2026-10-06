@@ -124,7 +124,7 @@ function Shell() {
       <main className="main" id="main-region" tabIndex={-1}>
         {/* Rendered above the page content so an update offer is visible
             wherever the user happens to be. */}
-        <UpdateNotice />
+        <UpdateNotice onOpenSettings={() => go("settings")} />
 
         {page === "home" && (
           <Home
@@ -149,7 +149,7 @@ function Shell() {
  * offers. A failed check is silent, because being offline is not an error the
  * user needs to hear about every launch.
  */
-function UpdateNotice() {
+function UpdateNotice({ onOpenSettings }: { onOpenSettings: () => void }) {
   const { settings } = useApp();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [dismissed, setDismissed] = useState(false);
@@ -186,7 +186,17 @@ function UpdateNotice() {
             <Button size="sm" variant="ghost" onClick={() => setDismissed(true)}>
               Not now
             </Button>
-            <Button size="sm" variant="secondary" onClick={() => setDismissed(true)}>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                // This button is labelled "Open Settings to install", so it
+                // must actually open Settings. It previously only dismissed the
+                // banner, leaving the user on the same page with no way to act.
+                setDismissed(true);
+                onOpenSettings();
+              }}
+            >
               Open Settings to install
             </Button>
           </>

@@ -72,14 +72,14 @@ All application data lives under one directory:
 Nothing is written during installation. Directories are created lazily on first
 use, so a fresh install stays inert until you actually do something.
 
-| Path            | What it holds                                                                                                                                                                                                         |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app.json`      | Your settings: schema version, whether automatic update checks are on, the last update-check timestamp, the last project folder (only if you leave that option on), log level, and one-time notice flags. No secrets. |
-| `profiles.json` | Your provider profiles: name, base URL, model ID, which agents each targets, advanced options, and test results. **An API key never appears here.** A profile references its key by an opaque ID (`secretRef`) only.  |
-| `secrets.dat`   | Your API keys, each sealed with Windows DPAPI scoped to your Windows account. This is the only place a key is stored.                                                                                                 |
-| `backups\`      | The Original backup, the 20 most recent snapshots per agent, and the change history ledger. These contain agent configuration files only — never a key, because keys never live in those files.                       |
-| `logs\`         | Local log files, redacted before writing. See below.                                                                                                                                                                  |
-| `cache\`        | Local scratch data.                                                                                                                                                                                                   |
+| Path            | What it holds                                                                                                                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app.json`      | Your settings: schema version, whether automatic update checks are on, the last update-check timestamp, the last project folder (only if you leave that option on), log level, and one-time notice flags. No secrets.         |
+| `profiles.json` | Your provider profiles: name, base URL, model ID, which agents each targets, advanced options, and test results. **An API key never appears here.** A profile references its key by an opaque ID (`secretRef`) only.          |
+| `secrets.dat`   | Your API keys, each sealed with Windows DPAPI scoped to your Windows account. This is the only place a key is stored sealed.                                                                                                  |
+| `backups\`      | The Original backup, the 20 most recent snapshots per agent, and the change history ledger. These copy your agent configuration files, with the value of any credential key emptied first, so no API key is ever stored here. |
+| `logs\`         | Local log files, redacted before writing. See below.                                                                                                                                                                          |
+| `cache\`        | Local scratch data.                                                                                                                                                                                                           |
 
 **Nothing is written outside these locations** except the agent configuration
 files you explicitly ask the app to change (`config.toml` for Codex,

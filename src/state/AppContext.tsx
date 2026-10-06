@@ -25,6 +25,7 @@ import {
   type ProfileSummary,
   type SettingsView,
 } from "../lib/api";
+import { findActiveProfile } from "../lib/active";
 
 /* --- Toasts ----------------------------------------------------------- */
 
@@ -177,16 +178,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSettings(result);
   }, []);
 
+  /**
+   * The profile currently applied to `agent`, or undefined.
+   *
+   * Delegates to `findActiveProfile`, which derives the answer from the
+   * backend's reported active configuration. The previous inline version
+   * returned the first profile that had ever passed a test for that agent, which
+   * is a different question and gives the wrong answer as soon as a user
+   * activates a second profile.
+   */
   const activeProfileFor = useCallback(
-    (agent: string) =>
-      profiles.find((profile) =>
-        Object.entries(profile.compatibility ?? {}).some(
-          ([key, record]) =>
-            key === agent &&
-            (record?.status === "compatible" || record?.status === "partially_compatible"),
-        ),
-      ),
-    [profiles],
+    (agent: string) => findActiveProfile(profiles, agents, agent),
+    [agents, profiles],
   );
 
   // First run is driven by settings, but an unreadable settings file must not
