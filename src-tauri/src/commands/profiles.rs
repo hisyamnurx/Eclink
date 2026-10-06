@@ -72,8 +72,7 @@ impl ProfileInput {
             return Err(BridgeError::validation("A provider name is required."));
         }
 
-        crate::profiles::validate_base_url(&self.base_url)
-            .map_err(BridgeError::validation)?;
+        crate::profiles::validate_base_url(&self.base_url).map_err(BridgeError::validation)?;
 
         let model = self.model.trim();
         if model.is_empty() {
@@ -139,7 +138,9 @@ impl ProfileInput {
 
 /// List every stored profile.
 #[tauri::command]
-pub async fn list_profiles(state: tauri::State<'_, AppState>) -> CommandResult<Vec<ProfileSummary>> {
+pub async fn list_profiles(
+    state: tauri::State<'_, AppState>,
+) -> CommandResult<Vec<ProfileSummary>> {
     let state = state.inner().clone();
     blocking(move || {
         let file = state.profiles().load()?;
@@ -244,10 +245,8 @@ pub async fn save_profile(
         } else if let Some(key) = input.api_key.as_deref() {
             let key = key.trim();
             if key.is_empty() {
-                return Err(BridgeError::validation(
-                    "The API key cannot be empty.",
-                )
-                .with_hint("Use \"Remove key\" if you want to delete the stored key."));
+                return Err(BridgeError::validation("The API key cannot be empty.")
+                    .with_hint("Use \"Remove key\" if you want to delete the stored key."));
             }
             if key.chars().any(char::is_control) {
                 return Err(BridgeError::validation(
@@ -532,7 +531,11 @@ mod tests {
         let mut raw = input();
         raw.targets = Vec::new();
         let err = raw.into_profile(None).unwrap_err();
-        assert!(err.message.contains("at least one agent"), "{}", err.message);
+        assert!(
+            err.message.contains("at least one agent"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]

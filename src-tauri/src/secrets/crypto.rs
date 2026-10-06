@@ -60,14 +60,14 @@ mod imp {
 
     impl Cipher for DpapiCipher {
         fn seal(&self, plaintext: &[u8]) -> BridgeResult<Vec<u8>> {
-            let mut input = blob_from(plaintext);
+            let input = blob_from(plaintext);
             let mut output = CRYPT_INTEGER_BLOB::default();
 
             // SAFETY: `input` points at a live slice for the duration of the
             // call; DPAPI copies what it needs before returning.
             let ok = unsafe {
                 CryptProtectData(
-                    &mut input,
+                    &input,
                     None,
                     None,
                     None,
@@ -91,13 +91,13 @@ mod imp {
         }
 
         fn open(&self, sealed: &[u8]) -> BridgeResult<Vec<u8>> {
-            let mut input = blob_from(sealed);
+            let input = blob_from(sealed);
             let mut output = CRYPT_INTEGER_BLOB::default();
 
             // SAFETY: as above; `sealed` outlives the call.
             let ok = unsafe {
                 CryptUnprotectData(
-                    &mut input,
+                    &input,
                     None,
                     None,
                     None,
@@ -230,6 +230,9 @@ mod tests {
         let mut sealed = cipher.seal(b"sk-tamper").unwrap();
         let last = sealed.len() - 1;
         sealed[last] ^= 0xFF;
-        assert!(cipher.open(&sealed).is_err(), "tampered blob must not decrypt");
+        assert!(
+            cipher.open(&sealed).is_err(),
+            "tampered blob must not decrypt"
+        );
     }
 }

@@ -11,8 +11,8 @@
 //! `launch`, `diagnostics`.
 
 pub mod claude;
-pub mod detect;
 pub mod codex;
+pub mod detect;
 
 use std::path::{Path, PathBuf};
 
@@ -172,10 +172,15 @@ impl ActiveConfiguration {
 /// history feed (PRD §27).
 #[derive(Debug, Clone)]
 pub enum MutationReason {
-    ActivateProfile { profile_id: String, profile_name: String },
+    ActivateProfile {
+        profile_id: String,
+        profile_name: String,
+    },
     RestoreDefault,
     RestoreOriginal,
-    RestoreSnapshot { snapshot_id: String },
+    RestoreSnapshot {
+        snapshot_id: String,
+    },
     UndoLastChange,
 }
 

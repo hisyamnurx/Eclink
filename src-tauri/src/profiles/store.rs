@@ -64,11 +64,9 @@ impl ProfileStore {
         // Parse loosely first so an unknown future version still yields the
         // fields we understand instead of crashing (PRD §46).
         let value: serde_json::Value = serde_json::from_str(&raw).map_err(|err| {
-            BridgeError::config_invalid(
-                "Your saved provider profiles could not be read.",
-            )
-            .with_hint("The file may be damaged. Restarting Eclyzer Bridge will recreate it.")
-            .with_details(err.to_string())
+            BridgeError::config_invalid("Your saved provider profiles could not be read.")
+                .with_hint("The file may be damaged. Restarting Eclyzer Bridge will recreate it.")
+                .with_details(err.to_string())
         })?;
 
         let version = value
@@ -160,7 +158,10 @@ mod tests {
     fn fresh_install_has_no_profiles() {
         let (_dir, store) = temp_store();
         let file = store.load().unwrap();
-        assert!(file.profiles.is_empty(), "fresh install must not seed profiles");
+        assert!(
+            file.profiles.is_empty(),
+            "fresh install must not seed profiles"
+        );
         assert_eq!(file.version, PROFILES_SCHEMA_VERSION);
     }
 

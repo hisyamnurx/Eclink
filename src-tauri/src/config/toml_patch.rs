@@ -203,27 +203,24 @@ impl CodexToml {
         // partially-updated auth table would be worse than a replaced one.
         table.remove("auth");
 
-        match &spec.auth_command {
-            Some(command) => {
-                let mut auth = Table::new();
-                set_string_item(&mut auth, "command", command.command);
-                let mut args = toml_edit::Array::new();
-                for arg in &command.args {
-                    args.push(*arg);
-                }
-                auth.insert("args", Item::Value(Value::Array(args)));
-                if let Some(timeout) = command.timeout_ms {
-                    auth.insert(
-                        "timeout_ms",
-                        Item::Value(Value::Integer(toml_edit::Formatted::new(timeout as i64))),
-                    );
-                }
-                // The auth table must render under its own `[.. .auth]` header,
-                // never inline, so it reads clearly in the user's config.
-                auth.set_implicit(false);
-                table.insert("auth", Item::Table(auth));
+        if let Some(command) = &spec.auth_command {
+            let mut auth = Table::new();
+            set_string_item(&mut auth, "command", command.command);
+            let mut args = toml_edit::Array::new();
+            for arg in &command.args {
+                args.push(*arg);
             }
-            None => {}
+            auth.insert("args", Item::Value(Value::Array(args)));
+            if let Some(timeout) = command.timeout_ms {
+                auth.insert(
+                    "timeout_ms",
+                    Item::Value(Value::Integer(toml_edit::Formatted::new(timeout as i64))),
+                );
+            }
+            // The auth table must render under its own `[.. .auth]` header,
+            // never inline, so it reads clearly in the user's config.
+            auth.set_implicit(false);
+            table.insert("auth", Item::Table(auth));
         }
 
         if !spec.http_headers.is_empty() {
@@ -250,7 +247,10 @@ impl CodexToml {
     /// Remove a `[model_providers.<id>]` entry, and the parent table if it
     /// becomes empty so we do not leave a stray `[model_providers]` header.
     pub fn remove_provider(&mut self, id: &str) -> bool {
-        let Some(parent) = self.doc.get_mut("model_providers").and_then(Item::as_table_like_mut)
+        let Some(parent) = self
+            .doc
+            .get_mut("model_providers")
+            .and_then(Item::as_table_like_mut)
         else {
             return false;
         };
@@ -273,8 +273,7 @@ impl CodexToml {
         if !self.doc.contains_key("model_providers") {
             let mut root = Table::new();
             root.set_implicit(true);
-            self.doc
-                .insert("model_providers", Item::Table(root));
+            self.doc.insert("model_providers", Item::Table(root));
         }
         let parent = self
             .doc
@@ -407,7 +406,10 @@ wire_api = "responses"
         doc.set_str("model_provider", "eclyzer_bridge_deepseek_abcd1234");
         let out = doc.to_string_preserving();
 
-        assert!(out.contains("# My Codex config — do not lose this comment"), "{out}");
+        assert!(
+            out.contains("# My Codex config — do not lose this comment"),
+            "{out}"
+        );
         assert!(out.contains("approval_policy = \"on-request\""), "{out}");
         assert!(out.contains("network_access = true"), "{out}");
         assert!(out.contains("[mcp_servers.context7]"), "{out}");
@@ -421,7 +423,10 @@ wire_api = "responses"
 
         assert!(out.contains("[model_providers.my_gateway]"), "{out}");
         assert!(out.contains("https://gw.example.com/v1"), "{out}");
-        assert!(out.contains("[model_providers.eclyzer_bridge_deepseek_abcd1234]"), "{out}");
+        assert!(
+            out.contains("[model_providers.eclyzer_bridge_deepseek_abcd1234]"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -431,7 +436,10 @@ wire_api = "responses"
         let first = doc.to_string_preserving();
         doc.upsert_provider("eclyzer_bridge_x_1", &spec());
         let second = doc.to_string_preserving();
-        assert_eq!(first, second, "re-applying the same profile must be a no-op");
+        assert_eq!(
+            first, second,
+            "re-applying the same profile must be a no-op"
+        );
     }
 
     #[test]
@@ -457,7 +465,10 @@ wire_api = "responses"
         let mut doc = CodexToml::parse(text).unwrap();
         assert!(doc.remove_provider("only_one"));
         let out = doc.to_string_preserving();
-        assert!(!out.contains("model_providers"), "empty parent must be removed: {out}");
+        assert!(
+            !out.contains("model_providers"),
+            "empty parent must be removed: {out}"
+        );
     }
 
     #[test]
@@ -493,9 +504,15 @@ wire_api = "responses"
         doc.upsert_provider("eclyzer_bridge_x_1", &spec);
         let out = doc.to_string_preserving();
 
-        assert!(out.contains("[model_providers.eclyzer_bridge_x_1.auth]"), "{out}");
+        assert!(
+            out.contains("[model_providers.eclyzer_bridge_x_1.auth]"),
+            "{out}"
+        );
         // Args are a real TOML array, so Codex receives argv, not a shell line.
-        assert!(out.contains("args = [\"secret\", \"resolve\", \"profile-1\"]"), "{out}");
+        assert!(
+            out.contains("args = [\"secret\", \"resolve\", \"profile-1\"]"),
+            "{out}"
+        );
         assert!(out.contains("timeout_ms = 5000"), "{out}");
 
         // The space-containing path must survive as one value. toml_edit emits
@@ -504,11 +521,16 @@ wire_api = "responses"
         // than on the quoting style.
         let reparsed = CodexToml::parse(&out).unwrap();
         assert_eq!(
-            reparsed.provider_auth_str("eclyzer_bridge_x_1", "command").as_deref(),
+            reparsed
+                .provider_auth_str("eclyzer_bridge_x_1", "command")
+                .as_deref(),
             Some(r"C:\Program Files\Eclyzer Bridge\eclyzer-bridge-helper.exe")
         );
         // It must never be split into multiple argv entries by the file itself.
-        assert!(!out.contains("command = \"C:\\Program Files\\Eclyzer"), "{out}");
+        assert!(
+            !out.contains("command = \"C:\\Program Files\\Eclyzer"),
+            "{out}"
+        );
     }
 
     #[test]
@@ -543,7 +565,10 @@ wire_api = "responses"
         let mut doc = CodexToml::parse(text).unwrap();
         doc.upsert_provider("p", &spec());
         let out = doc.to_string_preserving();
-        assert!(!out.contains("sk-secret"), "inline token must be removed: {out}");
+        assert!(
+            !out.contains("sk-secret"),
+            "inline token must be removed: {out}"
+        );
     }
 
     #[test]

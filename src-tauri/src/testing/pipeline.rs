@@ -115,10 +115,10 @@ pub fn resolve_secret(
     };
     match store.get(reference)? {
         Some(value) => Ok(Secret::new(value)),
-        None => Err(BridgeError::secret(
-            "The API key for this profile is no longer available.",
-        )
-        .with_hint("Open the profile and enter its API key again.")),
+        None => Err(
+            BridgeError::secret("The API key for this profile is no longer available.")
+                .with_hint("Open the profile and enter its API key again."),
+        ),
     }
 }
 
@@ -143,7 +143,9 @@ pub fn build_target(profile: &Profile, secret: Secret) -> BridgeResult<ProbeTarg
         return Err(BridgeError::validation(
             "This endpoint uses plain HTTP, so your API key would be sent without encryption.",
         )
-        .with_hint("Use an https:// endpoint, or enable the insecure-endpoint option for this profile.")
+        .with_hint(
+            "Use an https:// endpoint, or enable the insecure-endpoint option for this profile.",
+        )
         .with_details("insecure_endpoint"));
     }
 
@@ -314,7 +316,12 @@ pub async fn test_profile(
         ProbeOutcome::RateLimited => TestStepState::Warning,
         _ => TestStepState::Warning,
     };
-    steps.push(TestStep::new("model", "Model Availability", model_state, &model));
+    steps.push(TestStep::new(
+        "model",
+        "Model Availability",
+        model_state,
+        &model,
+    ));
     if model.outcome == ProbeOutcome::UnknownModel {
         // The remaining steps would all fail for the same reason, so say so
         // explicitly rather than reporting three more confusing failures.
@@ -626,7 +633,11 @@ mod tests {
         p.base_url = "http://api.example.com".to_string();
         let err = build_target(&p, Secret::new("k")).unwrap_err();
         assert_eq!(err.kind, crate::error::ErrorKind::Validation);
-        assert!(err.message.contains("without encryption"), "{}", err.message);
+        assert!(
+            err.message.contains("without encryption"),
+            "{}",
+            err.message
+        );
 
         // With confirmation it proceeds.
         p.advanced = AdvancedOptions {

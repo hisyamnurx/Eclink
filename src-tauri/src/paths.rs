@@ -107,7 +107,10 @@ pub fn home_dir() -> BridgeResult<PathBuf> {
 /// untouched (PRD §47); this only handles the `~` shorthand.
 pub fn expand_home(input: &str) -> BridgeResult<PathBuf> {
     let trimmed = input.trim();
-    if let Some(rest) = trimmed.strip_prefix("~/").or_else(|| trimmed.strip_prefix("~\\")) {
+    if let Some(rest) = trimmed
+        .strip_prefix("~/")
+        .or_else(|| trimmed.strip_prefix("~\\"))
+    {
         return Ok(home_dir()?.join(rest));
     }
     if trimmed == "~" {
@@ -123,7 +126,10 @@ mod tests {
     #[test]
     fn root_is_stable_and_separate() {
         let paths = AppPaths::with_root(r"D:\tmp\EclyzerBridge");
-        assert_eq!(paths.app_json(), PathBuf::from(r"D:\tmp\EclyzerBridge\app.json"));
+        assert_eq!(
+            paths.app_json(),
+            PathBuf::from(r"D:\tmp\EclyzerBridge\app.json")
+        );
         assert_eq!(
             paths.backups_dir_for("codex"),
             PathBuf::from(r"D:\tmp\EclyzerBridge\backups\codex")

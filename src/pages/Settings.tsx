@@ -47,8 +47,8 @@ export function Settings() {
         <div className="page-header__text">
           <h1>Settings</h1>
           <p className="page-header__subtitle">
-            Eclyzer Bridge collects nothing about you. There is no account, no
-            telemetry, and no crash reporting.
+            Eclyzer Bridge collects nothing about you. There is no account, no telemetry, and no
+            crash reporting.
           </p>
         </div>
       </header>
@@ -72,9 +72,9 @@ export function Settings() {
           <span className="checkbox__text">
             <span>Check for updates automatically</span>
             <span className="checkbox__hint">
-              At most once every 24 hours, from GitHub Releases. No information
-              about you or your machine is sent; this is an ordinary download
-              request. Updates are never installed without your confirmation.
+              At most once every 24 hours, from GitHub Releases. No information about you or your
+              machine is sent; this is an ordinary download request. Updates are never installed
+              without your confirmation.
             </span>
           </span>
         </label>
@@ -83,15 +83,13 @@ export function Settings() {
           <input
             type="checkbox"
             checked={settings.rememberProjectDirectory}
-            onChange={(event) =>
-              save({ rememberProjectDirectory: event.target.checked })
-            }
+            onChange={(event) => save({ rememberProjectDirectory: event.target.checked })}
           />
           <span className="checkbox__text">
             <span>Remember the last project folder</span>
             <span className="checkbox__hint">
-              Used to suggest a folder when you open a coding agent. Turning this
-              off forgets the saved path immediately.
+              Used to suggest a folder when you open a coding agent. Turning this off forgets the
+              saved path immediately.
             </span>
           </span>
         </label>
@@ -126,10 +124,7 @@ export function Settings() {
             { key: "Protected by", value: settings.secretBackend },
             {
               key: "Stored API keys",
-              value:
-                settings.secretCount === 0
-                  ? "none"
-                  : `${settings.secretCount}`,
+              value: settings.secretCount === 0 ? "none" : `${settings.secretCount}`,
             },
             { key: "Provider profiles", value: `${settings.profileCount}` },
             {
@@ -147,9 +142,7 @@ export function Settings() {
             onClick={() =>
               void call("reveal_data_directory")
                 .then(() => undefined)
-                .catch(() =>
-                  notify("error", "Could not open the data folder."),
-                )
+                .catch(() => notify("error", "Could not open the data folder."))
             }
           >
             Open data folder
@@ -166,8 +159,8 @@ export function Settings() {
         </div>
 
         <p className="muted small">
-          Eclyzer Bridge is an independent open-source project and is not
-          affiliated with, endorsed by, or sponsored by OpenAI or Anthropic.
+          Eclyzer Bridge is an independent open-source project and is not affiliated with, endorsed
+          by, or sponsored by OpenAI or Anthropic.
         </p>
       </section>
 
@@ -184,12 +177,13 @@ function UpdatePanel() {
   const action = useAction();
 
   const check = () =>
-    void action.run(() => call("check_for_updates")).then((result) => {
-      if (result) setStatus(result);
-    });
+    void action
+      .run(() => call("check_for_updates"))
+      .then((result) => {
+        if (result) setStatus(result);
+      });
 
-  const install = () =>
-    void action.run(() => call("install_update"));
+  const install = () => void action.run(() => call("install_update"));
 
   return (
     <section className="card" aria-labelledby="set-updates">
@@ -224,9 +218,8 @@ function UpdatePanel() {
       {status?.available && (
         <div className="stack stack--tight">
           <Banner tone="info" title={`Version ${status.version} is available`}>
-            You are running {status.currentVersion}. Updates are downloaded from
-            GitHub Releases and verified against a signature before anything is
-            replaced.
+            You are running {status.currentVersion}. Updates are downloaded from GitHub Releases and
+            verified against a signature before anything is replaced.
           </Banner>
           {status.notes && (
             <>
@@ -238,9 +231,7 @@ function UpdatePanel() {
             <Button variant="primary" onClick={install} busy={action.busy}>
               Download and install
             </Button>
-            <span className="small muted">
-              Eclyzer Bridge restarts when the install finishes.
-            </span>
+            <span className="small muted">Eclyzer Bridge restarts when the install finishes.</span>
           </div>
         </div>
       )}
@@ -250,19 +241,19 @@ function UpdatePanel() {
 
 function DiagnosticsPanel() {
   const { notify } = useApp();
-  const { data: report, error, loading, reload } = useAsyncData(
-    () => call("build_diagnostics_report"),
-    [],
-  );
+  const {
+    data: report,
+    error,
+    loading,
+    reload,
+  } = useAsyncData(() => call("build_diagnostics_report"), []);
 
   return (
     <section className="card" aria-labelledby="set-diagnostics">
       <div className="card__header">
         <div className="card__title">
           <h2 id="set-diagnostics">Diagnostics</h2>
-          <div className="card__hint">
-            A summary of your setup you can paste into a bug report.
-          </div>
+          <div className="card__hint">A summary of your setup you can paste into a bug report.</div>
         </div>
         <div className="card__actions">
           <Button
@@ -283,8 +274,8 @@ function DiagnosticsPanel() {
       </div>
 
       <Banner tone="info" title="This report never contains your API keys">
-        It lists versions, paths, and configuration states only. Credentials are
-        removed even if one somehow reached the text.
+        It lists versions, paths, and configuration states only. Credentials are removed even if one
+        somehow reached the text.
       </Banner>
 
       {error ? (
@@ -300,10 +291,12 @@ function DiagnosticsPanel() {
 
 function LogsPanel() {
   const { notify } = useApp();
-  const { data: lines, error, loading, reload } = useAsyncData(
-    () => call("read_logs", { maxLines: 400 }),
-    [],
-  );
+  const {
+    data: lines,
+    error,
+    loading,
+    reload,
+  } = useAsyncData(() => call("read_logs", { maxLines: 400 }), []);
   const clearAction = useAction();
 
   return (
@@ -311,9 +304,7 @@ function LogsPanel() {
       <div className="card__header">
         <div className="card__title">
           <h2 id="set-logs">Logs</h2>
-          <div className="card__hint">
-            Stored locally, redacted, and pruned after 7 days.
-          </div>
+          <div className="card__hint">Stored locally, redacted, and pruned after 7 days.</div>
         </div>
         <div className="card__actions">
           <Button variant="ghost" onClick={reload}>
@@ -353,8 +344,8 @@ function LogsPanel() {
         <LoadingState label="Reading logs…" />
       ) : !lines || lines.length === 0 ? (
         <EmptyState title="No log entries yet">
-          Eclyzer Bridge writes here when something happens. An empty log on a
-          fresh install is normal.
+          Eclyzer Bridge writes here when something happens. An empty log on a fresh install is
+          normal.
         </EmptyState>
       ) : (
         <>

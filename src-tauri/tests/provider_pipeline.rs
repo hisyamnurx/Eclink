@@ -310,9 +310,17 @@ async fn a_closed_port_is_unreachable() {
 async fn a_bearer_token_is_sent_as_an_authorization_header() {
     // The authentication probe posts to the Anthropic path, which is the
     // endpoint that returns 401 rather than 404 for a bad key.
-    let server = MockServer::start(vec![("/v1/messages".into(), Response::json(200, OK_MESSAGES))]);
+    let server = MockServer::start(vec![(
+        "/v1/messages".into(),
+        Response::json(200, OK_MESSAGES),
+    )]);
     let result = probe_authentication(&target(&server, AuthMode::Bearer)).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
 
     let sent = server.requests();
     let request = sent.first().expect("a request was made");
@@ -330,7 +338,12 @@ async fn x_api_key_mode_sends_the_key_in_that_header_instead() {
         Response::json(200, OK_MESSAGES),
     )]);
     let result = probe_authentication(&target(&server, AuthMode::XApiKey)).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
 
     let sent = server.requests();
     let request = sent.first().expect("a request was made");
@@ -388,12 +401,14 @@ async fn a_two_hundred_from_the_auth_probe_counts_as_authenticated() {
 async fn a_two_hundred_with_a_chat_shaped_body_is_also_authenticated() {
     // An OpenAI-compatible gateway answering on the Anthropic path is unusual
     // but not an authentication failure.
-    let server = MockServer::start(vec![(
-        "/v1/messages".into(),
-        Response::json(200, OK_CHAT),
-    )]);
+    let server = MockServer::start(vec![("/v1/messages".into(), Response::json(200, OK_CHAT))]);
     let result = probe_authentication(&target(&server, AuthMode::Bearer)).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
 }
 
 #[tokio::test]
@@ -445,7 +460,12 @@ async fn a_model_present_in_the_list_is_supported() {
         Response::json(200, r#"{"data":[{"id":"test-model"}]}"#),
     )]);
     let result = probe_model(&target(&server, AuthMode::Bearer)).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
 }
 
 #[tokio::test]
@@ -457,7 +477,12 @@ async fn an_endpoint_without_a_models_list_is_not_a_failure() {
         Response::json(404, r#"{"error":{"message":"not found"}}"#),
     )]);
     let result = probe_model(&target(&server, AuthMode::Bearer)).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
 }
 
 #[tokio::test]
@@ -516,11 +541,17 @@ async fn codex_protocol_requires_the_responses_endpoint() {
         Response::json(200, OK_RESPONSES),
     )]);
     let result = probe_codex_protocol(&target(&server, AuthMode::Bearer)).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
 
     let sent = server.requests();
     assert!(
-        sent.iter().any(|request| request.path.contains("/responses")),
+        sent.iter()
+            .any(|request| request.path.contains("/responses")),
         "the Codex probe must call /responses, got {:?}",
         sent.iter().map(|r| &r.path).collect::<Vec<_>>()
     );
@@ -543,17 +574,20 @@ async fn claude_protocol_requires_the_messages_endpoint() {
     let server = MockServer::start(vec![
         // The Anthropic probe sends a deliberately tiny request; a 400 about the
         // request shape still proves the endpoint exists.
-        (
-            "/v1/messages".into(),
-            Response::json(200, OK_MESSAGES),
-        ),
+        ("/v1/messages".into(), Response::json(200, OK_MESSAGES)),
     ]);
     let result = probe_claude_protocol(&target(&server, AuthMode::XApiKey)).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
 
     let sent = server.requests();
     assert!(
-        sent.iter().any(|request| request.path.contains("/v1/messages")),
+        sent.iter()
+            .any(|request| request.path.contains("/v1/messages")),
         "the Claude probe must call /v1/messages"
     );
     // Anthropic-shaped requests require the version header.
@@ -579,7 +613,12 @@ async fn a_streaming_reply_is_recognized() {
     // The Anthropic streaming path is /v1/messages.
     let server = MockServer::start(vec![("/v1/messages".into(), Response::sse(sse))]);
     let result = probe_streaming(&target(&server, AuthMode::XApiKey), false).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
     assert!(result.streamed, "the SSE stream was not detected");
 }
 
@@ -606,12 +645,14 @@ async fn a_non_streaming_reply_is_not_claimed_as_streaming() {
 async fn a_tool_call_in_the_reply_is_detected() {
     let body = r#"{"content":[{"type":"tool_use","id":"toolu_1","name":"get_weather",
 "input":{"city":"Jakarta"}}]}"#;
-    let server = MockServer::start(vec![(
-        "/v1/messages".into(),
-        Response::json(200, body),
-    )]);
+    let server = MockServer::start(vec![("/v1/messages".into(), Response::json(200, body))]);
     let result = probe_tool_calling(&target(&server, AuthMode::XApiKey), false).await;
-    assert_eq!(result.outcome, ProbeOutcome::Supported, "{:?}", result.detail);
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "{:?}",
+        result.detail
+    );
     assert!(result.tool_called, "the tool call was not detected");
 }
 

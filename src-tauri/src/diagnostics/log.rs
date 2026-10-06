@@ -22,9 +22,11 @@ use crate::error::{BridgeError, BridgeResult};
 /// Log verbosity, persisted in `app.json`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum LogLevel {
     Error,
     Warn,
+    #[default]
     Info,
     Debug,
 }
@@ -37,13 +39,6 @@ impl LogLevel {
             LogLevel::Info => "info",
             LogLevel::Debug => "debug",
         }
-    }
-}
-
-impl Default for LogLevel {
-    fn default() -> Self {
-        // Production default is INFO (PRD §37.3).
-        LogLevel::Info
     }
 }
 
@@ -128,8 +123,8 @@ pub fn init_logging(dir: &Path, level: LogLevel) -> BridgeResult<LogGuard> {
     let file_appender = tracing_appender::rolling::daily(dir, "eclyzer-bridge.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
-    let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(level.as_filter()));
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level.as_filter()));
 
     let make_writer = RedactingMakeWriter {
         inner: non_blocking,
@@ -227,8 +222,9 @@ pub fn clear_logs(dir: &Path) -> BridgeResult<u64> {
         // No log directory yet means there is nothing to clear.
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(0),
         Err(err) => {
-            return Err(BridgeError::io("Could not open the log folder.")
-                .with_details(err.to_string()))
+            return Err(
+                BridgeError::io("Could not open the log folder.").with_details(err.to_string())
+            )
         }
     };
     let mut removed = 0u64;
@@ -329,7 +325,8 @@ mod tests {
         std::fs::write(&recent, b"recent").unwrap();
 
         // Backdate the old file well past the retention window.
-        let old_time = std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60 * 24 * 30);
+        let old_time =
+            std::time::SystemTime::now() - std::time::Duration::from_secs(60 * 60 * 24 * 30);
         filetime_set(&old, old_time);
 
         prune_logs(dir.path());

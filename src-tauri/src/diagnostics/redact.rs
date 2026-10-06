@@ -159,10 +159,7 @@ pub fn redact_text(input: &str) -> String {
         })
         .into_owned();
 
-    out = p
-        .known_key_prefix
-        .replace_all(&out, REDACTED)
-        .into_owned();
+    out = p.known_key_prefix.replace_all(&out, REDACTED).into_owned();
 
     out = p
         .long_opaque_token
@@ -303,8 +300,14 @@ mod tests {
 
     #[test]
     fn redact_header_only_touches_sensitive_names() {
-        assert_eq!(redact_header("Content-Type", "application/json"), "Content-Type: application/json");
-        assert_eq!(redact_header("Authorization", "Bearer x"), "Authorization: [REDACTED]");
+        assert_eq!(
+            redact_header("Content-Type", "application/json"),
+            "Content-Type: application/json"
+        );
+        assert_eq!(
+            redact_header("Authorization", "Bearer x"),
+            "Authorization: [REDACTED]"
+        );
     }
 
     #[test]

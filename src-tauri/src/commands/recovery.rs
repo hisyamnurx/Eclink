@@ -214,10 +214,7 @@ pub async fn list_history(
     let limit = limit.unwrap_or(50).min(crate::backup::HISTORY_LIMIT);
 
     blocking(move || {
-        let mut entries = state
-            .backups()
-            .history()
-            .list(agent.map(|a| a.as_str()))?;
+        let mut entries = state.backups().history().list(agent.map(|a| a.as_str()))?;
         entries.truncate(limit);
         Ok(entries)
     })

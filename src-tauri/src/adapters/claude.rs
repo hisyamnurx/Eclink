@@ -43,8 +43,8 @@ use std::path::{Path, PathBuf};
 
 use crate::adapters::detect;
 use crate::adapters::{
-    ActiveConfiguration, AgentAdapter, AgentDetection, AgentDiagnostics, ApplyOptions, ApplyOutcome,
-    ConfigParseState, ConfigSnapshot, LaunchPlan,
+    ActiveConfiguration, AgentAdapter, AgentDetection, AgentDiagnostics, ApplyOptions,
+    ApplyOutcome, ConfigParseState, ConfigSnapshot, LaunchPlan,
 };
 use crate::backup::{BackupManager, Snapshot};
 use crate::config::fs::{harden_permissions, sha256_hex, write_atomic};
@@ -572,7 +572,9 @@ impl AgentAdapter for ClaudeAdapter {
         if !content.trim().is_empty() {
             ClaudeJson::parse(&content).map_err(|err| {
                 BridgeError::internal("The original Claude Code backup is not valid JSON.")
-                    .with_hint("Eclyzer Bridge did not write it. Use Restore Claude Default instead.")
+                    .with_hint(
+                        "Eclyzer Bridge did not write it. Use Restore Claude Default instead.",
+                    )
                     .with_details(err.message)
             })?;
         }
@@ -773,8 +775,7 @@ mod tests {
 
     #[test]
     fn restore_keeps_env_when_user_variables_remain() {
-        let text =
-            r#"{ "env": { "ANTHROPIC_BASE_URL": "https://gw.example.com", "KEEP": "1" } }"#;
+        let text = r#"{ "env": { "ANTHROPIC_BASE_URL": "https://gw.example.com", "KEEP": "1" } }"#;
         let mut doc = ClaudeJson::parse(text).unwrap();
         ClaudeAdapter::strip_managed(&mut doc);
         let out = doc.to_string_preserving();

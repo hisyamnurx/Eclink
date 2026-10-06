@@ -32,11 +32,8 @@ import {
   type ProviderTemplate,
   type TestOutcome,
 } from "../lib/api";
-import {
-  allowsActivation,
-  compatibilityLabel,
-  relativeTime,
-} from "../lib/format";import { copyToClipboard } from "../lib/opener";
+import { allowsActivation, compatibilityLabel, relativeTime } from "../lib/format";
+import { copyToClipboard } from "../lib/opener";
 import { useAction, useApp } from "../state/AppContext";
 import { TestResults } from "./TestResults";
 
@@ -65,17 +62,12 @@ export function Configure({ initialAgent }: ConfigureProps) {
     };
   }, []);
 
-  const agentOptions = useMemo(
-    () => agents.filter((agent) => agent.installed),
-    [agents],
-  );
+  const agentOptions = useMemo(() => agents.filter((agent) => agent.installed), [agents]);
 
   // The selection is derived rather than synchronised in an effect: if the
   // chosen agent is no longer installed, fall back to the first one available.
   // This keeps the tab list and the selection consistent in the same render.
-  const [preferredAgent, setPreferredAgent] = useState<AgentId>(
-    initialAgent ?? "codex",
-  );
+  const [preferredAgent, setPreferredAgent] = useState<AgentId>(initialAgent ?? "codex");
   const activeAgent =
     agentOptions.find((agent) => agent.agent === preferredAgent)?.agent ??
     agentOptions[0]?.agent ??
@@ -95,9 +87,8 @@ export function Configure({ initialAgent }: ConfigureProps) {
         <div className="page-header__text">
           <h1>Providers</h1>
           <p className="page-header__subtitle">
-            A provider profile is an endpoint, a model, and credentials. Eclyzer
-            Bridge writes only the settings it owns and leaves everything else in
-            your configuration untouched.
+            A provider profile is an endpoint, a model, and credentials. Eclyzer Bridge writes only
+            the settings it owns and leaves everything else in your configuration untouched.
           </p>
         </div>
         <Button variant="primary" onClick={() => setEditing("new")}>
@@ -178,9 +169,8 @@ function CostNoticeBanner() {
         </Button>
       }
     >
-      Test Connection and the Playground send real requests to your provider and
-      may count towards your usage or cost. Eclyzer Bridge never sends anything on
-      its own.
+      Test Connection and the Playground send real requests to your provider and may count towards
+      your usage or cost. Eclyzer Bridge never sends anything on its own.
     </Banner>
   );
 }
@@ -204,8 +194,8 @@ function ProfileList({
   if (profiles.length === 0) {
     return (
       <EmptyState title="No providers yet">
-        Add a provider to point {agentSummary?.displayName ?? "your agent"} at an
-        endpoint you choose.
+        Add a provider to point {agentSummary?.displayName ?? "your agent"} at an endpoint you
+        choose.
       </EmptyState>
     );
   }
@@ -277,8 +267,7 @@ function ProfileRow({
   const canActivate = allowsActivation(status) && profile.hasSecret;
   const agentSummary = agents.find((item) => item.agent === agent);
   const isActive =
-    agentSummary?.activeKind === "managed" &&
-    agentSummary.activeProfileName === profile.name;
+    agentSummary?.activeKind === "managed" && agentSummary.activeProfileName === profile.name;
 
   const runTest = () =>
     void testAction.run(
@@ -311,13 +300,15 @@ function ProfileRow({
     );
 
   const activate = () =>
-    void activateAction.run(
-      async () => {
-        const result = await call("activate_profile", { id: profile.id, agent });
-        return result;
-      },
-      { success: `Activated ${profile.name} for ${agentSummary?.displayName}.` },
-    ).then(onChanged);
+    void activateAction
+      .run(
+        async () => {
+          const result = await call("activate_profile", { id: profile.id, agent });
+          return result;
+        },
+        { success: `Activated ${profile.name} for ${agentSummary?.displayName}.` },
+      )
+      .then(onChanged);
 
   return (
     <div className={`list-row${isActive ? " list-row--active" : ""}`}>
@@ -397,9 +388,7 @@ function DeleteProfileDialog({
   onDeleted: () => void;
 }) {
   const [impact, setImpact] = useState<
-    | { activeFor: AgentId[]; requiresDecision: boolean }
-    | null
-    | "loading"
+    { activeFor: AgentId[]; requiresDecision: boolean } | null | "loading"
   >("loading");
   const [error, setError] = useState<string | null>(null);
   const action = useAction();
@@ -439,8 +428,7 @@ function DeleteProfileDialog({
       },
     );
 
-  const requiresDecision =
-    impact !== "loading" && impact !== null && impact.requiresDecision;
+  const requiresDecision = impact !== "loading" && impact !== null && impact.requiresDecision;
   // Narrowed once so the JSX below does not have to re-check the sentinel.
   const impactDetail = impact === "loading" || impact === null ? null : impact;
 
@@ -461,11 +449,7 @@ function DeleteProfileDialog({
             >
               Keep it — let me switch first
             </Button>
-            <Button
-              variant="danger"
-              onClick={() => deleteNow(true)}
-              busy={action.busy}
-            >
+            <Button variant="danger" onClick={() => deleteNow(true)} busy={action.busy}>
               Delete anyway
             </Button>
           </>
@@ -493,17 +477,17 @@ function DeleteProfileDialog({
                 .map((item) => (item === "codex" ? "Codex" : "Claude Code"))
                 .join(" and ")
             : "An agent"}{" "}
-          is using {profile.name}. Deleting it now would leave that agent pointed at
-          a configuration Eclyzer Bridge no longer manages.
+          is using {profile.name}. Deleting it now would leave that agent pointed at a configuration
+          Eclyzer Bridge no longer manages.
           <br />
           <br />
-          The safer order is: activate another provider, or restore the default
-          configuration, and then delete this one.
+          The safer order is: activate another provider, or restore the default configuration, and
+          then delete this one.
         </Banner>
       ) : (
         <p className="muted small">
-          The stored API key for this provider is deleted with it. Your agent
-          configuration is not changed by deleting a provider.
+          The stored API key for this provider is deleted with it. Your agent configuration is not
+          changed by deleting a provider.
         </p>
       )}
 
@@ -592,8 +576,7 @@ function ProfileEditor({
 
   const isEditing = profile !== null;
   const patch = useCallback(
-    (changes: Partial<EditorState>) =>
-      setState((current) => ({ ...current, ...changes })),
+    (changes: Partial<EditorState>) => setState((current) => ({ ...current, ...changes })),
     [],
   );
 
@@ -604,8 +587,7 @@ function ProfileEditor({
       providerName: template.name,
       baseUrl: template.baseUrl ?? state.baseUrl,
       model: template.suggestedModels[0] ?? state.model,
-      targets:
-        template.likelyTargets.length > 0 ? [...template.likelyTargets] : state.targets,
+      targets: template.likelyTargets.length > 0 ? [...template.likelyTargets] : state.targets,
     });
   };
 
@@ -862,9 +844,7 @@ function ProfileEditor({
               className="input mono"
               type="password"
               value={state.apiKey}
-              onChange={(event) =>
-                patch({ apiKey: event.target.value, clearApiKey: false })
-              }
+              onChange={(event) => patch({ apiKey: event.target.value, clearApiKey: false })}
               placeholder={isEditing ? "Leave empty to keep the stored key" : "sk-…"}
               autoComplete="off"
               spellCheck={false}
@@ -888,8 +868,7 @@ function ProfileEditor({
               <span className="checkbox__text">
                 <span>Remove the stored API key</span>
                 <span className="checkbox__hint">
-                  The provider stays, but it cannot be activated until a new key is
-                  entered.
+                  The provider stays, but it cannot be activated until a new key is entered.
                 </span>
               </span>
             </label>
@@ -918,8 +897,7 @@ function ProfileEditor({
                   <span className="checkbox__text">
                     <span>{agent.displayName}</span>
                     <span className="checkbox__hint">
-                      Codex and Claude Code speak different protocols. Each is
-                      tested separately.
+                      Codex and Claude Code speak different protocols. Each is tested separately.
                     </span>
                   </span>
                 </label>
@@ -935,8 +913,8 @@ function ProfileEditor({
           {insecure && (
             <div className="stack stack--tight">
               <Banner tone="warn" title="Insecure Endpoint">
-                Your API key may be sent without encryption. The endpoint below uses
-                plain HTTP and is not on this machine.
+                Your API key may be sent without encryption. The endpoint below uses plain HTTP and
+                is not on this machine.
                 <br />
                 <code className="mono">{state.baseUrl}</code>
               </Banner>
@@ -978,9 +956,7 @@ function wouldBeInsecure(state: EditorState): boolean {
   if (!/^http:\/\//i.test(url)) return false;
   // localhost, 127.0.0.1, ::1 and .local are treated as local by the backend and
   // do not need the warning.
-  return !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|[^/]*\.local)(:|\/|$)/i.test(
-    url,
-  );
+  return !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|[^/]*\.local)(:|\/|$)/i.test(url);
 }
 
 function AdvancedEditor({
@@ -1004,8 +980,8 @@ function AdvancedEditor({
   return (
     <>
       <p className="muted small">
-        These options exist for gateways that need extra headers or a different
-        authentication style. Most providers need none of them.
+        These options exist for gateways that need extra headers or a different authentication
+        style. Most providers need none of them.
       </p>
 
       <Field
@@ -1017,9 +993,7 @@ function AdvancedEditor({
           id="p-auth"
           className="select"
           value={state.advanced.authMode ?? "bearer"}
-          onChange={(event) =>
-            update({ authMode: event.target.value as AuthMode })
-          }
+          onChange={(event) => update({ authMode: event.target.value as AuthMode })}
         >
           <option value="bearer">Authorization: Bearer</option>
           <option value="x_api_key">x-api-key</option>
@@ -1041,9 +1015,7 @@ function AdvancedEditor({
           value={state.advanced.timeoutMs ?? ""}
           onChange={(event) =>
             update({
-              timeoutMs: event.target.value
-                ? Number(event.target.value)
-                : undefined,
+              timeoutMs: event.target.value ? Number(event.target.value) : undefined,
             })
           }
           placeholder="20000"
@@ -1115,9 +1087,8 @@ function AdvancedEditor({
           </Button>
         </div>
         <div className="field__hint">
-          A value that looks like a credential is stored encrypted, like your API
-          key. Authorization, x-api-key, and proxy-authorization cannot be
-          overridden here.
+          A value that looks like a credential is stored encrypted, like your API key.
+          Authorization, x-api-key, and proxy-authorization cannot be overridden here.
         </div>
       </div>
 
@@ -1164,9 +1135,7 @@ function AdvancedEditor({
           id="p-alias"
           className="input mono"
           value={state.advanced.modelAlias ?? ""}
-          onChange={(event) =>
-            update({ modelAlias: event.target.value || undefined })
-          }
+          onChange={(event) => update({ modelAlias: event.target.value || undefined })}
           placeholder="same as model ID"
           spellCheck={false}
         />
@@ -1192,9 +1161,7 @@ function AdvancedEditor({
           size="sm"
           onClick={() =>
             void copyToClipboard(
-              state.baseUrl
-                ? `${state.baseUrl} · ${state.model}`
-                : "No endpoint set",
+              state.baseUrl ? `${state.baseUrl} · ${state.model}` : "No endpoint set",
             )
           }
         >

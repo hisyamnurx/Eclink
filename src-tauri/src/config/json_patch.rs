@@ -138,8 +138,8 @@ impl ClaudeJson {
 
     /// Serialise with 2-space indentation, matching Claude Code's own style.
     pub fn to_string_preserving(&self) -> String {
-        let mut rendered =
-            serde_json::to_string_pretty(&Value::Object(self.root.clone())).unwrap_or_else(|_| {
+        let mut rendered = serde_json::to_string_pretty(&Value::Object(self.root.clone()))
+            .unwrap_or_else(|_| {
                 // Pretty-printing a Value cannot fail for a plain object, but
                 // fall back to compact output rather than panicking.
                 Value::Object(self.root.clone()).to_string()
@@ -189,7 +189,10 @@ mod tests {
         assert!(out.contains("enabledPlugins"), "{out}");
         assert!(out.contains("hooks"), "{out}");
         assert!(out.contains("Bash(git status)"), "{out}");
-        assert!(out.contains("\"MY_FLAG\": \"1\""), "existing env must survive: {out}");
+        assert!(
+            out.contains("\"MY_FLAG\": \"1\""),
+            "existing env must survive: {out}"
+        );
         assert!(out.contains("ANTHROPIC_BASE_URL"), "{out}");
     }
 
@@ -241,7 +244,10 @@ mod tests {
         let out = doc.to_string_preserving();
         let model_pos = out.find("\"model\"").unwrap();
         let perms_pos = out.find("\"permissions\"").unwrap();
-        assert!(model_pos < perms_pos, "original key order must be kept: {out}");
+        assert!(
+            model_pos < perms_pos,
+            "original key order must be kept: {out}"
+        );
     }
 
     #[test]

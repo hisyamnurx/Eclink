@@ -51,8 +51,8 @@ export function Home({ onConfigure, onHistory, onPlayground }: HomeProps) {
         <div className="page-header__text">
           <h1>Overview</h1>
           <p className="page-header__subtitle">
-            Eclyzer Bridge points Codex and Claude Code at the provider you choose,
-            without you editing configuration files by hand.
+            Eclyzer Bridge points Codex and Claude Code at the provider you choose, without you
+            editing configuration files by hand.
           </p>
         </div>
         <Button variant="primary" onClick={() => onConfigure()}>
@@ -62,8 +62,8 @@ export function Home({ onConfigure, onHistory, onPlayground }: HomeProps) {
 
       {agents.length === 0 && (
         <EmptyState title="No coding agents were found">
-          Eclyzer Bridge could not find Codex or Claude Code on this machine. Install
-          one, then choose Refresh.
+          Eclyzer Bridge could not find Codex or Claude Code on this machine. Install one, then
+          choose Refresh.
         </EmptyState>
       )}
 
@@ -78,12 +78,7 @@ export function Home({ onConfigure, onHistory, onPlayground }: HomeProps) {
         />
       ))}
 
-      {launchTarget && (
-        <LaunchDialog
-          agent={launchTarget}
-          onClose={() => setLaunchTarget(null)}
-        />
-      )}
+      {launchTarget && <LaunchDialog agent={launchTarget} onClose={() => setLaunchTarget(null)} />}
     </div>
   );
 }
@@ -105,24 +100,19 @@ function AgentCard({
   const refresh = useAction();
 
   // The profile the user believes is active for this agent, if any targets it.
-  const candidate = profiles.find((profile) =>
-    profile.targets.includes(agent.agent),
-  );
+  const candidate = profiles.find((profile) => profile.targets.includes(agent.agent));
   const record = candidate?.compatibility?.[agent.agent];
 
   const installedTone: StatusTone = agent.installed ? "ok" : "warn";
 
-  const onRefresh = () =>
-    void refresh.run(() => refreshAgent(agent.agent), {});
+  const onRefresh = () => void refresh.run(() => refreshAgent(agent.agent), {});
   return (
     <section className="card" aria-labelledby={`agent-${agent.agent}`}>
       <div className="card__header">
         <div className="card__title">
           <h2 id={`agent-${agent.agent}`}>{agent.displayName}</h2>
           <div className="card__hint">
-            {agent.installed
-              ? `Version ${agent.version ?? "unknown"}`
-              : "Not installed"}
+            {agent.installed ? `Version ${agent.version ?? "unknown"}` : "Not installed"}
           </div>
         </div>
         <div className="card__actions">
@@ -164,16 +154,16 @@ function AgentCard({
             ) : undefined
           }
         >
-          Eclyzer Bridge installs nothing on your behalf. Install{" "}
-          {agent.displayName}, then choose Refresh.
+          Eclyzer Bridge installs nothing on your behalf. Install {agent.displayName}, then choose
+          Refresh.
         </Banner>
       )}
 
       {agent.configState === "invalid" && (
         <Banner tone="bad" title="Eclyzer Bridge will not modify this configuration">
-          {agent.configPath} is not valid. Eclyzer Bridge refuses to rewrite a file
-          it cannot parse, because doing so would destroy settings it does not
-          understand. Fix the file yourself, then choose Refresh.
+          {agent.configPath} is not valid. Eclyzer Bridge refuses to rewrite a file it cannot parse,
+          because doing so would destroy settings it does not understand. Fix the file yourself,
+          then choose Refresh.
         </Banner>
       )}
 
@@ -184,16 +174,12 @@ function AgentCard({
           { key: "Active", value: <ActiveValue agent={agent} /> },
           {
             key: "Endpoint",
-            value:
-              agent.activeKind === "managed" && candidate
-                ? candidate.baseUrl
-                : "—",
+            value: agent.activeKind === "managed" && candidate ? candidate.baseUrl : "—",
             mono: true,
           },
           {
             key: "Model",
-            value:
-              agent.activeKind === "managed" && candidate ? candidate.model : "—",
+            value: agent.activeKind === "managed" && candidate ? candidate.model : "—",
             mono: true,
           },
           {
@@ -251,16 +237,13 @@ function ActiveValue({ agent }: { agent: AgentSummary }) {
     return (
       <>
         External Configuration{" "}
-        <span className="dim small">
-          (your own settings; Eclyzer Bridge did not write these)
-        </span>
+        <span className="dim small">(your own settings; Eclyzer Bridge did not write these)</span>
       </>
     );
   }
   return (
     <>
-      Default configuration{" "}
-      <span className="dim small">(no custom provider configured)</span>
+      Default configuration <span className="dim small">(no custom provider configured)</span>
     </>
   );
 }
@@ -282,17 +265,9 @@ function openLink(
 }
 
 /** Launch dialog: choose a project folder, preview the command, then run it. */
-function LaunchDialog({
-  agent,
-  onClose,
-}: {
-  agent: AgentId;
-  onClose: () => void;
-}) {
+function LaunchDialog({ agent, onClose }: { agent: AgentId; onClose: () => void }) {
   const { settings, saveSettings, notify } = useApp();
-  const [directory, setDirectory] = useState(
-    settings?.lastProjectDirectory ?? "",
-  );
+  const [directory, setDirectory] = useState(settings?.lastProjectDirectory ?? "");
   const [preview, setPreview] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const action = useAction();
@@ -362,29 +337,18 @@ function LaunchDialog({
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button
-            variant="secondary"
-            onClick={doPreview}
-            busy={action.busy}
-            disabled={!directory}
-          >
+          <Button variant="secondary" onClick={doPreview} busy={action.busy} disabled={!directory}>
             Preview command
           </Button>
-          <Button
-            variant="primary"
-            onClick={doLaunch}
-            busy={action.busy}
-            disabled={!directory}
-          >
+          <Button variant="primary" onClick={doLaunch} busy={action.busy} disabled={!directory}>
             Open
           </Button>
         </>
       }
     >
       <p className="muted small">
-        The agent opens in a new terminal window in the folder you choose. Eclyzer
-        Bridge exits as soon as the window opens — closing Bridge never closes your
-        agent.
+        The agent opens in a new terminal window in the folder you choose. Eclyzer Bridge exits as
+        soon as the window opens — closing Bridge never closes your agent.
       </p>
 
       <div className="field">
@@ -424,8 +388,8 @@ function LaunchDialog({
           <div className="field__label">Command that will run</div>
           <pre className="code selectable">{preview}</pre>
           <div className="field__hint">
-            The model and provider names are passed as separate arguments, never
-            interpreted as shell commands.
+            The model and provider names are passed as separate arguments, never interpreted as
+            shell commands.
           </div>
         </div>
       )}

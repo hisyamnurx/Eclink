@@ -35,7 +35,10 @@ fn helper_resolves_a_secret_written_by_the_app() {
     );
     // stderr must never carry the secret.
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(!stderr.contains("sk-roundtrip"), "stderr leaked the secret: {stderr}");
+    assert!(
+        !stderr.contains("sk-roundtrip"),
+        "stderr leaked the secret: {stderr}"
+    );
 }
 
 #[test]

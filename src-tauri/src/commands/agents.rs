@@ -109,10 +109,10 @@ pub async fn list_agents(state: tauri::State<'_, AppState>) -> CommandResult<Vec
     })
     .await
     .map_err(|err| {
-        crate::commands::CommandError::from(BridgeError::internal(
-            "Could not check for installed coding agents.",
+        crate::commands::CommandError::from(
+            BridgeError::internal("Could not check for installed coding agents.")
+                .with_details(err.to_string()),
         )
-        .with_details(err.to_string()))
     })?;
 
     Ok(summaries)
@@ -182,7 +182,6 @@ pub async fn get_diagnostics(
             BridgeError::internal("Could not collect diagnostics.").with_details(err.to_string()),
         )
     })
-    .map_err(Into::into)
 }
 
 #[cfg(test)]

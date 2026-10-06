@@ -73,46 +73,7 @@ pub async fn update_settings(
 ) -> CommandResult<SettingsView> {
     let state = state.inner().clone();
     blocking(move || {
-        state.update_settings(|settings| {
-            // Only explicitly-provided fields change, so a partial patch from an
-            // older UI never resets an unrelated preference.
-            if let Some(value) = patch.update_check {
-                settings.update_check = value;
-            }
-            if let Some(value) = patch.remember_project_directory {
-                settings.remember_project_directory = value;
-                if !value {
-                    // Stop remembering, and forget what was remembered.
-                    settings.last_project_directory = None;
-                }
-            }
-            if let Some(value) = patch.log_level {
-                settings.log_level = value;
-            }
-            if let Some(value) = patch.first_run_complete {
-                settings.first_run_complete = value;
-            }
-            if let Some(value) = patch.cost_notice_seen {
-                settings.cost_notice_seen = value;
-            }
-            if let Some(value) = patch.insecure_endpoint_notice_seen {
-                settings.insecure_endpoint_notice_seen = value;
-            }
-            // A remembered folder is only meaningful while remembering is on,
-            // and it must be an absolute path so a later launch cannot resolve
-            // relative to an unexpected working directory.
-            if let Some(value) = patch.last_project_directory {
-                let trimmed = value.trim();
-                let accept = settings.remember_project_directory
-                    && !trimmed.is_empty()
-                    && std::path::Path::new(trimmed).is_absolute();
-                settings.last_project_directory = if accept {
-                    Some(trimmed.to_string())
-                } else {
-                    None
-                };
-            }
-        })?;
+        state.update_settings(|settings| apply_patch(settings, &patch))?;
 
         let profile_count = state.profiles().load()?.profiles.len();
         Ok(SettingsView {
@@ -130,27 +91,80 @@ pub async fn update_settings(
     .await
 }
 
+/// Apply `patch` onto `settings` in place.
+///
+/// Split out of the command so the merge rules — which decide whether a user's
+/// preference survives a partial update — can be tested directly.
+fn apply_patch(settings: &mut AppSettings, patch: &SettingsPatch) {
+    // Only explicitly-provided fields change, so a partial patch from an older
+    // UI never resets an unrelated preference.
+    if let Some(value) = patch.update_check {
+        settings.update_check = value;
+    }
+    if let Some(value) = patch.remember_project_directory {
+        settings.remember_project_directory = value;
+        if !value {
+            // Stop remembering, and forget what was remembered.
+            settings.last_project_directory = None;
+        }
+    }
+    if let Some(value) = patch.log_level {
+        settings.log_level = value;
+    }
+    if let Some(value) = patch.first_run_complete {
+        settings.first_run_complete = value;
+    }
+    if let Some(value) = patch.cost_notice_seen {
+        settings.cost_notice_seen = value;
+    }
+    if let Some(value) = patch.insecure_endpoint_notice_seen {
+        settings.insecure_endpoint_notice_seen = value;
+    }
+    // A remembered folder is only meaningful while remembering is on, and it
+    // must be an absolute path so a later launch cannot resolve relative to an
+    // unexpected working directory.
+    if let Some(value) = patch.last_project_directory.as_ref() {
+        let trimmed = value.trim();
+        let accept = settings.remember_project_directory
+            && !trimmed.is_empty()
+            && std::path::Path::new(trimmed).is_absolute();
+        settings.last_project_directory = if accept {
+            Some(trimmed.to_string())
+        } else {
+            None
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn an_empty_patch_changes_nothing() {
-        let mut settings = AppSettings::default();
-        settings.update_check = false;
-        settings.cost_notice_seen = true;
+        // Start from a non-default state so the assertions below can prove that
+        // an absent field is left alone rather than merely left at its default.
+        let mut settings = AppSettings {
+            update_check: false,
+            cost_notice_seen: true,
+            log_level: crate::diagnostics::LogLevel::Warn,
+            ..AppSettings::default()
+        };
 
-        let patch = SettingsPatch::default();
-        // Simulate the same guarded assignment the command performs.
-        if let Some(value) = patch.update_check {
-            settings.update_check = value;
-        }
-        if let Some(value) = patch.cost_notice_seen {
-            settings.cost_notice_seen = value;
-        }
+        apply_patch(&mut settings, &SettingsPatch::default());
 
         assert!(!settings.update_check, "an absent field must not be reset");
-        assert!(settings.cost_notice_seen, "an absent field must not be reset");
+        assert!(
+            settings.cost_notice_seen,
+            "an absent field must not be reset"
+        );
+        assert_eq!(
+            settings.log_level,
+            crate::diagnostics::LogLevel::Warn,
+            "an absent field must not be reset"
+        );
+        assert!(settings.remember_project_directory, "left at its default");
+        assert_eq!(settings.last_project_directory, None);
     }
 
     #[test]
@@ -158,11 +172,144 @@ mod tests {
         let mut settings = AppSettings::default();
         let patch = SettingsPatch {
             update_check: Some(false),
-            ..Default::default()
+            ..SettingsPatch::default()
         };
-        if let Some(value) = patch.update_check {
-            settings.update_check = value;
-        }
+        apply_patch(&mut settings, &patch);
         assert!(!settings.update_check);
+    }
+
+    #[test]
+    fn turning_off_remembering_forgets_the_stored_folder() {
+        let mut settings = AppSettings {
+            remember_project_directory: true,
+            last_project_directory: Some(r"C:\Projects\app".into()),
+            ..AppSettings::default()
+        };
+        let patch = SettingsPatch {
+            remember_project_directory: Some(false),
+            ..SettingsPatch::default()
+        };
+
+        apply_patch(&mut settings, &patch);
+
+        assert!(!settings.remember_project_directory);
+        // Keeping it would leave a path on disk that the user asked to forget.
+        assert_eq!(settings.last_project_directory, None);
+    }
+
+    #[test]
+    fn an_absolute_folder_is_remembered_while_remembering_is_on() {
+        let mut settings = AppSettings {
+            remember_project_directory: true,
+            ..AppSettings::default()
+        };
+        let patch = SettingsPatch {
+            last_project_directory: Some(r"C:\Projects\app".into()),
+            ..SettingsPatch::default()
+        };
+
+        apply_patch(&mut settings, &patch);
+
+        assert_eq!(
+            settings.last_project_directory.as_deref(),
+            Some(r"C:\Projects\app")
+        );
+    }
+
+    #[test]
+    fn a_relative_folder_is_refused() {
+        // A relative path would resolve against whatever working directory the
+        // launch happens to inherit, which is not what the user chose.
+        let mut settings = AppSettings {
+            remember_project_directory: true,
+            last_project_directory: Some(r"C:\Projects\old".into()),
+            ..AppSettings::default()
+        };
+        let patch = SettingsPatch {
+            last_project_directory: Some(r"..\somewhere".into()),
+            ..SettingsPatch::default()
+        };
+
+        apply_patch(&mut settings, &patch);
+
+        assert_eq!(settings.last_project_directory, None);
+    }
+
+    #[test]
+    fn a_folder_is_refused_while_remembering_is_off() {
+        let mut settings = AppSettings {
+            remember_project_directory: false,
+            ..AppSettings::default()
+        };
+        let patch = SettingsPatch {
+            last_project_directory: Some(r"C:\Projects\app".into()),
+            ..SettingsPatch::default()
+        };
+
+        apply_patch(&mut settings, &patch);
+
+        assert_eq!(settings.last_project_directory, None);
+    }
+
+    #[test]
+    fn a_folder_with_surrounding_whitespace_is_trimmed() {
+        let mut settings = AppSettings {
+            remember_project_directory: true,
+            ..AppSettings::default()
+        };
+        let patch = SettingsPatch {
+            last_project_directory: Some("  C:\\Projects\\app  ".into()),
+            ..SettingsPatch::default()
+        };
+
+        apply_patch(&mut settings, &patch);
+
+        assert_eq!(
+            settings.last_project_directory.as_deref(),
+            Some(r"C:\Projects\app")
+        );
+    }
+
+    #[test]
+    fn an_empty_folder_clears_the_stored_one() {
+        let mut settings = AppSettings {
+            remember_project_directory: true,
+            last_project_directory: Some(r"C:\Projects\old".into()),
+            ..AppSettings::default()
+        };
+        let patch = SettingsPatch {
+            last_project_directory: Some("   ".into()),
+            ..SettingsPatch::default()
+        };
+
+        apply_patch(&mut settings, &patch);
+
+        assert_eq!(settings.last_project_directory, None);
+    }
+
+    #[test]
+    fn a_patch_touching_one_field_leaves_the_others_alone() {
+        let mut settings = AppSettings {
+            update_check: true,
+            remember_project_directory: true,
+            log_level: crate::diagnostics::LogLevel::Info,
+            first_run_complete: true,
+            cost_notice_seen: true,
+            insecure_endpoint_notice_seen: true,
+            ..AppSettings::default()
+        };
+        let patch = SettingsPatch {
+            update_check: Some(false),
+            ..SettingsPatch::default()
+        };
+
+        apply_patch(&mut settings, &patch);
+
+        assert!(!settings.update_check);
+        assert!(settings.remember_project_directory);
+        assert_eq!(settings.log_level, crate::diagnostics::LogLevel::Info);
+        assert!(settings.first_run_complete);
+        assert!(settings.cost_notice_seen);
+        assert!(settings.insecure_endpoint_notice_seen);
     }
 }

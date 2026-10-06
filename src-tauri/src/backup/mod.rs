@@ -122,7 +122,7 @@ impl BackupManager {
         let meta = OriginalMeta {
             agent: agent.to_string(),
             created_at: chrono::Local::now().to_rfc3339(),
-            sha256: sha256,
+            sha256,
             bytes,
             existed,
             source_path: config_path.display().to_string(),
@@ -133,7 +133,8 @@ impl BackupManager {
         // pointing at a missing payload.
         write_atomic(&dir.join("content"), content.as_bytes())?;
         let meta_json = serde_json::to_string_pretty(&meta).map_err(|err| {
-            BridgeError::internal("Could not record the original backup.").with_details(err.to_string())
+            BridgeError::internal("Could not record the original backup.")
+                .with_details(err.to_string())
         })?;
         write_atomic(&dir.join("meta.json"), meta_json.as_bytes())?;
 
@@ -164,12 +165,16 @@ impl BackupManager {
         profile_id: Option<&str>,
         managed_keys: &[String],
     ) -> BridgeResult<Snapshot> {
-        self.snapshots.create(agent, config_path, reason, profile_id, managed_keys)
+        self.snapshots
+            .create(agent, config_path, reason, profile_id, managed_keys)
     }
 
     /// Total number of snapshots held for `agent`.
     pub fn snapshot_count(&self, agent: &str) -> usize {
-        self.snapshots.list(agent).map(|list| list.len()).unwrap_or(0)
+        self.snapshots
+            .list(agent)
+            .map(|list| list.len())
+            .unwrap_or(0)
     }
 
     /// Restore the raw original configuration atomically (PRD §29).
@@ -256,7 +261,10 @@ mod tests {
         std::fs::write(&config, "model = \"managed\"\n").unwrap();
 
         manager.write_original("codex", &config).unwrap();
-        assert!(!config.exists(), "restoring a non-existent original removes the file");
+        assert!(
+            !config.exists(),
+            "restoring a non-existent original removes the file"
+        );
     }
 
     #[test]
@@ -267,7 +275,10 @@ mod tests {
         std::fs::write(&config, "model = \"managed\"\n").unwrap();
 
         manager.write_original("codex", &config).unwrap();
-        assert_eq!(std::fs::read_to_string(&config).unwrap(), "model = \"original\"\n");
+        assert_eq!(
+            std::fs::read_to_string(&config).unwrap(),
+            "model = \"original\"\n"
+        );
     }
 
     #[test]
@@ -298,8 +309,14 @@ mod tests {
         manager.ensure_original("codex", &codex_cfg, &[]).unwrap();
         manager.ensure_original("claude", &claude_cfg, &[]).unwrap();
 
-        assert_eq!(manager.read_original("codex").unwrap().unwrap().1, "codex-original\n");
-        assert_eq!(manager.read_original("claude").unwrap().unwrap().1, "claude-original\n");
+        assert_eq!(
+            manager.read_original("codex").unwrap().unwrap().1,
+            "codex-original\n"
+        );
+        assert_eq!(
+            manager.read_original("claude").unwrap().unwrap().1,
+            "claude-original\n"
+        );
     }
 
     #[test]
@@ -308,7 +325,9 @@ mod tests {
         // does not add any of its own.
         let (_dir, manager, config) = setup();
         std::fs::write(&config, "model = \"m\"\n").unwrap();
-        manager.ensure_original("codex", &config, &["model".into()]).unwrap();
+        manager
+            .ensure_original("codex", &config, &["model".into()])
+            .unwrap();
 
         let dir = manager.original_path("codex");
         for entry in std::fs::read_dir(&dir).unwrap().flatten() {

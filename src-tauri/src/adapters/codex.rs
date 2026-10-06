@@ -191,9 +191,8 @@ impl CodexAdapter {
         let path = self.locate_config()?;
 
         // Serialize mutations per agent (PRD §48).
-        let _lock = crate::config::fs::FileLock::acquire(
-            self.backups.root().join("codex-config.lock"),
-        )?;
+        let _lock =
+            crate::config::fs::FileLock::acquire(self.backups.root().join("codex-config.lock"))?;
 
         // 1. read raw
         let raw = crate::config::fs::read_to_string_opt(&path)?;
@@ -353,7 +352,10 @@ impl AgentAdapter for CodexAdapter {
         }
 
         let Some(executable) = executable else {
-            return Ok(AgentDetection::not_installed(AgentId::Codex, INSTALL_GUIDE_URL));
+            return Ok(AgentDetection::not_installed(
+                AgentId::Codex,
+                INSTALL_GUIDE_URL,
+            ));
         };
 
         let version = tauri::async_runtime::block_on(detect::version_of(&executable));
@@ -438,9 +440,7 @@ impl AgentAdapter for CodexAdapter {
             Some(id) if is_managed_provider_id(id) => Ok(ActiveConfiguration {
                 kind: ActiveConfigurationKind::Managed,
                 profile_id: None,
-                profile_name: doc
-                    .provider_str(id, "name")
-                    .or_else(|| Some(id.clone())),
+                profile_name: doc.provider_str(id, "name").or_else(|| Some(id.clone())),
                 label: doc
                     .provider_str(id, "name")
                     .unwrap_or_else(|| "Eclyzer Bridge provider".to_string()),
@@ -517,10 +517,10 @@ impl AgentAdapter for CodexAdapter {
         profile.validate().map_err(BridgeError::validation)?;
 
         if !profile.targets_agent(AgentId::Codex) {
-            return Err(BridgeError::validation(
-                "This profile is not configured for Codex.",
-            )
-            .with_hint("Edit the profile and add Codex as a target."));
+            return Err(
+                BridgeError::validation("This profile is not configured for Codex.")
+                    .with_hint("Edit the profile and add Codex as a target."),
+            );
         }
 
         let provider_id = managed_provider_id(profile);
@@ -535,7 +535,11 @@ impl AgentAdapter for CodexAdapter {
                 .map(|v| detect::version_at_least(v, AUTH_COMMAND_MIN_VERSION))
                 .unwrap_or(true);
 
-        let env_key = if use_auth_command { None } else { Some(FALLBACK_ENV_KEY) };
+        let env_key = if use_auth_command {
+            None
+        } else {
+            Some(FALLBACK_ENV_KEY)
+        };
 
         let reason = crate::adapters::MutationReason::ActivateProfile {
             profile_id: profile.id.clone(),
@@ -580,9 +584,8 @@ impl AgentAdapter for CodexAdapter {
     fn restore_original(&self, options: &ApplyOptions<'_>) -> BridgeResult<ApplyOutcome> {
         let path = self.locate_config()?;
 
-        let _lock = crate::config::fs::FileLock::acquire(
-            self.backups.root().join("codex-config.lock"),
-        )?;
+        let _lock =
+            crate::config::fs::FileLock::acquire(self.backups.root().join("codex-config.lock"))?;
 
         let (_meta, content) = self
             .backups
@@ -631,9 +634,8 @@ impl AgentAdapter for CodexAdapter {
         options: &ApplyOptions<'_>,
     ) -> BridgeResult<ApplyOutcome> {
         let path = self.locate_config()?;
-        let _lock = crate::config::fs::FileLock::acquire(
-            self.backups.root().join("codex-config.lock"),
-        )?;
+        let _lock =
+            crate::config::fs::FileLock::acquire(self.backups.root().join("codex-config.lock"))?;
 
         // An empty snapshot legitimately means "the file did not exist".
         if !snapshot.content.is_empty() {
@@ -852,7 +854,8 @@ persistence = "none"
             "deepseek-chat".into(),
             vec![AgentId::Codex],
         );
-        let spec = CodexAdapter::provider_spec(&profile, "https://api.deepseek.com/v1", None, false, None);
+        let spec =
+            CodexAdapter::provider_spec(&profile, "https://api.deepseek.com/v1", None, false, None);
         assert_eq!(spec.wire_api, "responses");
         // The trailing slash must be trimmed so the URL is canonical.
         assert_eq!(spec.base_url, "https://api.deepseek.com/v1");
@@ -871,9 +874,15 @@ persistence = "none"
         let spec = CodexAdapter::provider_spec(&profile, "https://x/v1", Some(helper), true, None);
 
         let auth = spec.auth_command.expect("auth command expected");
-        assert_eq!(auth.command, r"C:\Program Files\Eclyzer Bridge\eclyzer-bridge-helper.exe");
+        assert_eq!(
+            auth.command,
+            r"C:\Program Files\Eclyzer Bridge\eclyzer-bridge-helper.exe"
+        );
         assert_eq!(auth.args, vec!["secret", "resolve", profile.id.as_str()]);
-        assert!(spec.env_key.is_none(), "auth and env_key are mutually exclusive");
+        assert!(
+            spec.env_key.is_none(),
+            "auth and env_key are mutually exclusive"
+        );
     }
 
     #[test]
@@ -906,7 +915,13 @@ persistence = "none"
             "m".into(),
             vec![AgentId::Codex],
         );
-        let spec = CodexAdapter::provider_spec(&profile, "https://x/v1", None, false, Some(FALLBACK_ENV_KEY));
+        let spec = CodexAdapter::provider_spec(
+            &profile,
+            "https://x/v1",
+            None,
+            false,
+            Some(FALLBACK_ENV_KEY),
+        );
         assert_eq!(spec.env_key, Some(FALLBACK_ENV_KEY));
         assert!(spec.auth_command.is_none());
     }
@@ -921,7 +936,10 @@ persistence = "none"
 
     #[test]
     fn older_codex_versions_are_detected_for_fallback() {
-        assert!(!detect::version_at_least("0.19.0", AUTH_COMMAND_MIN_VERSION));
+        assert!(!detect::version_at_least(
+            "0.19.0",
+            AUTH_COMMAND_MIN_VERSION
+        ));
         assert!(detect::version_at_least("0.20.0", AUTH_COMMAND_MIN_VERSION));
         assert!(detect::version_at_least("1.0.0", AUTH_COMMAND_MIN_VERSION));
     }

@@ -93,13 +93,8 @@ pub async fn activate_profile(
     // The config hash the UI last saw, so an edit made in another window aborts
     // the write instead of being clobbered (PRD §31.3).
     let state_for_hash = state.clone();
-    let expected_sha256 = blocking(move || {
-        Ok(state_for_hash
-            .adapter(agent)
-            .read_config()?
-            .sha256)
-    })
-    .await?;
+    let expected_sha256 =
+        blocking(move || Ok(state_for_hash.adapter(agent).read_config()?.sha256)).await?;
 
     let profile_name = profile.name.clone();
     let state_for_apply = state.clone();
@@ -114,7 +109,9 @@ pub async fn activate_profile(
             expected_sha256,
             agent_version: None,
         };
-        state_for_apply.adapter(agent).apply_profile(&profile, &options)
+        state_for_apply
+            .adapter(agent)
+            .apply_profile(&profile, &options)
     })
     .await?;
 

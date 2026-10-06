@@ -19,12 +19,7 @@ import {
   Modal,
   Tabs,
 } from "../components/ui";
-import {
-  call,
-  type AgentId,
-  type ApplyOutcome,
-  type SnapshotView,
-} from "../lib/api";
+import { call, type AgentId, type ApplyOutcome, type SnapshotView } from "../lib/api";
 import { absoluteTime, bytes, relativeTime } from "../lib/format";
 import { useAsyncData } from "../lib/hooks";
 import { useAction, useApp } from "../state/AppContext";
@@ -36,9 +31,7 @@ export function History({ initialAgent }: { initialAgent?: AgentId }) {
 
   // Derived, not synchronised: if the preferred agent is not installed, fall
   // back to the first available one in the same render.
-  const [preferredAgent, setPreferredAgent] = useState<AgentId>(
-    initialAgent ?? "codex",
-  );
+  const [preferredAgent, setPreferredAgent] = useState<AgentId>(initialAgent ?? "codex");
   const agent =
     installed.find((item) => item.agent === preferredAgent)?.agent ??
     installed[0]?.agent ??
@@ -61,8 +54,8 @@ export function History({ initialAgent }: { initialAgent?: AgentId }) {
         <div className="page-header__text">
           <h1>History</h1>
           <p className="page-header__subtitle">
-            Every change Eclyzer Bridge has made, and every state it can put back.
-            Restoring always snapshots what it is about to replace.
+            Every change Eclyzer Bridge has made, and every state it can put back. Restoring always
+            snapshots what it is about to replace.
           </p>
         </div>
       </header>
@@ -101,10 +94,12 @@ export function History({ initialAgent }: { initialAgent?: AgentId }) {
 }
 
 function ChangeLog({ agent }: { agent: AgentId }) {
-  const { data: entries, error, loading, reload } = useAsyncData(
-    () => call("list_history", { agent, limit: 100 }),
-    [agent],
-  );
+  const {
+    data: entries,
+    error,
+    loading,
+    reload,
+  } = useAsyncData(() => call("list_history", { agent, limit: 100 }), [agent]);
 
   if (error) return <ErrorState error={error} onRetry={reload} />;
   if (loading && !entries) return <LoadingState label="Loading change history…" />;
@@ -112,8 +107,8 @@ function ChangeLog({ agent }: { agent: AgentId }) {
   if (!entries || entries.length === 0) {
     return (
       <EmptyState title="No changes recorded yet">
-        Eclyzer Bridge has not modified this agent's configuration. Activating a
-        provider will be recorded here.
+        Eclyzer Bridge has not modified this agent's configuration. Activating a provider will be
+        recorded here.
       </EmptyState>
     );
   }
@@ -121,9 +116,7 @@ function ChangeLog({ agent }: { agent: AgentId }) {
   return (
     <div className="card card--flush">
       <table className="table">
-        <caption className="visually-hidden">
-          Changes Eclyzer Bridge has made to this agent
-        </caption>
+        <caption className="visually-hidden">Changes Eclyzer Bridge has made to this agent</caption>
         <thead>
           <tr>
             <th scope="col">When</th>
@@ -136,15 +129,11 @@ function ChangeLog({ agent }: { agent: AgentId }) {
           {entries.map((entry) => (
             <tr key={entry.id}>
               <td className="nowrap">
-                <span title={absoluteTime(entry.createdAt)}>
-                  {relativeTime(entry.createdAt)}
-                </span>
+                <span title={absoluteTime(entry.createdAt)}>{relativeTime(entry.createdAt)}</span>
               </td>
               <td>
                 <strong>{entry.label}</strong>
-                {entry.profileName && (
-                  <div className="small dim">{entry.profileName}</div>
-                )}
+                {entry.profileName && <div className="small dim">{entry.profileName}</div>}
               </td>
               <td>
                 {entry.success ? (
@@ -160,13 +149,7 @@ function ChangeLog({ agent }: { agent: AgentId }) {
                   </>
                 )}
               </td>
-              <td>
-                {entry.success && entry.snapshotId ? (
-                  "Yes"
-                ) : (
-                  <span className="dim">—</span>
-                )}
-              </td>
+              <td>{entry.success && entry.snapshotId ? "Yes" : <span className="dim">—</span>}</td>
             </tr>
           ))}
         </tbody>
@@ -177,10 +160,12 @@ function ChangeLog({ agent }: { agent: AgentId }) {
 
 function SnapshotList({ agent }: { agent: AgentId }) {
   const [confirm, setConfirm] = useState<SnapshotView | null>(null);
-  const { data: snapshots, error, loading, reload } = useAsyncData(
-    () => call("list_snapshots", { agent }),
-    [agent],
-  );
+  const {
+    data: snapshots,
+    error,
+    loading,
+    reload,
+  } = useAsyncData(() => call("list_snapshots", { agent }), [agent]);
 
   if (error) return <ErrorState error={error} onRetry={reload} />;
   if (loading && !snapshots) return <LoadingState label="Loading snapshots…" />;
@@ -188,8 +173,8 @@ function SnapshotList({ agent }: { agent: AgentId }) {
   if (!snapshots || snapshots.length === 0) {
     return (
       <EmptyState title="No snapshots yet">
-        A snapshot is saved before every change, so there is always something to
-        return to. None have been taken for this agent.
+        A snapshot is saved before every change, so there is always something to return to. None
+        have been taken for this agent.
       </EmptyState>
     );
   }
@@ -197,8 +182,8 @@ function SnapshotList({ agent }: { agent: AgentId }) {
   return (
     <>
       <Banner tone="info" title="The newest 20 snapshots are kept">
-        Older ones are removed automatically. Your original configuration is kept
-        separately and is never deleted.
+        Older ones are removed automatically. Your original configuration is kept separately and is
+        never deleted.
       </Banner>
 
       <div className="list">
@@ -207,8 +192,8 @@ function SnapshotList({ agent }: { agent: AgentId }) {
             <div className="list-row__main">
               <div className="list-row__title">{snapshot.label}</div>
               <div className="list-row__sub">
-                {absoluteTime(snapshot.createdAt)} ·{" "}
-                {relativeTime(snapshot.createdAt)} · {bytes(snapshot.bytes)}
+                {absoluteTime(snapshot.createdAt)} · {relativeTime(snapshot.createdAt)} ·{" "}
+                {bytes(snapshot.bytes)}
               </div>
               <div className="list-row__sub mono">{snapshot.id}</div>
             </div>
@@ -226,9 +211,7 @@ function SnapshotList({ agent }: { agent: AgentId }) {
           agent={agent}
           title={`Restore the snapshot from ${absoluteTime(confirm.createdAt)}?`}
           description={`This replaces your current ${agent === "codex" ? "Codex" : "Claude Code"} configuration with the state saved before "${confirm.label}".`}
-          onConfirm={() =>
-            call("restore_snapshot", { agent, snapshotId: confirm.id })
-          }
+          onConfirm={() => call("restore_snapshot", { agent, snapshotId: confirm.id })}
           onClose={() => setConfirm(null)}
           onRestored={reload}
         />
@@ -240,10 +223,12 @@ function SnapshotList({ agent }: { agent: AgentId }) {
 function RecoveryPanel({ agent }: { agent: AgentId }) {
   const [pending, setPending] = useState<"default" | "original" | null>(null);
   const action = useAction();
-  const { data: status, error, loading, reload } = useAsyncData(
-    () => call("recovery_status", { agent }),
-    [agent],
-  );
+  const {
+    data: status,
+    error,
+    loading,
+    reload,
+  } = useAsyncData(() => call("recovery_status", { agent }), [agent]);
 
   const undo = () =>
     void action
@@ -260,9 +245,8 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
     <>
       {status.externalConfiguration && (
         <Banner tone="warn" title="Your configuration was not written by Eclyzer Bridge">
-          This agent is using a custom configuration Eclyzer Bridge did not create.
-          Restoring the default would replace it, so the option below is offered
-          with that in mind.
+          This agent is using a custom configuration Eclyzer Bridge did not create. Restoring the
+          default would replace it, so the option below is offered with that in mind.
         </Banner>
       )}
 
@@ -310,9 +294,9 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
       <div className="stack stack--tight">
         <h2>Restore the default configuration</h2>
         <p className="card__hint">
-          Removes the provider Eclyzer Bridge added, returning this agent to its
-          own default. Everything else in your configuration — comments, other
-          providers, sandbox settings — is left untouched.
+          Removes the provider Eclyzer Bridge added, returning this agent to its own default.
+          Everything else in your configuration — comments, other providers, sandbox settings — is
+          left untouched.
         </p>
         <div>
           <Button onClick={() => setPending("default")}>Restore default</Button>
@@ -329,10 +313,7 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
             : "Available once Eclyzer Bridge has changed this agent at least once."}
         </p>
         <div>
-          <Button
-            onClick={() => setPending("original")}
-            disabled={!status.hasOriginal}
-          >
+          <Button onClick={() => setPending("original")} disabled={!status.hasOriginal}>
             Restore original
           </Button>
         </div>
@@ -386,18 +367,20 @@ function RestoreConfirmDialog({
   const [failure, setFailure] = useState<string | null>(null);
 
   const go = () =>
-    void action.run(onConfirm, {
-      onError: (api) => {
-        setFailure(api.hint ? `${api.message} ${api.hint}` : api.message);
-        return true;
-      },
-    }).then((result) => {
-      if (result) {
-        setOutcome(result);
-        onRestored();
-        notify("success", "Configuration restored.");
-      }
-    });
+    void action
+      .run(onConfirm, {
+        onError: (api) => {
+          setFailure(api.hint ? `${api.message} ${api.hint}` : api.message);
+          return true;
+        },
+      })
+      .then((result) => {
+        if (result) {
+          setOutcome(result);
+          onRestored();
+          notify("success", "Configuration restored.");
+        }
+      });
 
   return (
     <Modal
@@ -423,8 +406,8 @@ function RestoreConfirmDialog({
       {outcome ? (
         <>
           <Banner tone="info" title="Restored">
-            {agent === "codex" ? "Codex" : "Claude Code"} configuration has been
-            written and verified.
+            {agent === "codex" ? "Codex" : "Claude Code"} configuration has been written and
+            verified.
           </Banner>
           <Meta
             items={[
@@ -440,17 +423,14 @@ function RestoreConfirmDialog({
               },
               {
                 key: "Keys updated",
-                value:
-                  outcome.managedKeys.length > 0
-                    ? outcome.managedKeys.join(", ")
-                    : "none",
+                value: outcome.managedKeys.length > 0 ? outcome.managedKeys.join(", ") : "none",
                 mono: true,
               },
             ]}
           />
           <p className="muted small">
-            The state you just replaced was snapshotted, so this is reversible from
-            the Snapshots list.
+            The state you just replaced was snapshotted, so this is reversible from the Snapshots
+            list.
           </p>
         </>
       ) : (

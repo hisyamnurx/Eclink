@@ -9,15 +9,7 @@
 
 import { useState } from "react";
 
-import {
-  Badge,
-  Banner,
-  Button,
-  EmptyState,
-  Field,
-  LoadingState,
-  Meta,
-} from "../components/ui";
+import { Badge, Banner, Button, EmptyState, Field, LoadingState, Meta } from "../components/ui";
 import { call, type AgentId, type PlaygroundResult, type ProfileSummary } from "../lib/api";
 import { latency } from "../lib/format";
 import { useApp } from "../state/AppContext";
@@ -25,15 +17,11 @@ import { useApp } from "../state/AppContext";
 export function Playground({ initialAgent }: { initialAgent?: AgentId }) {
   const { agents, profiles, loading } = useApp();
   const installed = agents.filter((agent) => agent.installed);
-  const [agent, setAgent] = useState<AgentId>(
-    initialAgent ?? installed[0]?.agent ?? "codex",
-  );
+  const [agent, setAgent] = useState<AgentId>(initialAgent ?? installed[0]?.agent ?? "codex");
 
   if (loading) return <LoadingState label="Loading providers…" />;
 
-  const usable = profiles.filter(
-    (profile) => profile.targets.includes(agent) && profile.hasSecret,
-  );
+  const usable = profiles.filter((profile) => profile.targets.includes(agent) && profile.hasSecret);
 
   return (
     <div className="main__inner">
@@ -41,8 +29,8 @@ export function Playground({ initialAgent }: { initialAgent?: AgentId }) {
         <div className="page-header__text">
           <h1>Playground</h1>
           <p className="page-header__subtitle">
-            Send one message to a provider and see the real response. This talks
-            directly to your provider using your key.
+            Send one message to a provider and see the real response. This talks directly to your
+            provider using your key.
           </p>
         </div>
       </header>
@@ -65,14 +53,14 @@ export function Playground({ initialAgent }: { initialAgent?: AgentId }) {
       )}
 
       <Banner tone="info" title="This request is billable">
-        The message below is sent to your provider and may count towards your usage
-        or cost. Nothing is sent unless you press Send.
+        The message below is sent to your provider and may count towards your usage or cost. Nothing
+        is sent unless you press Send.
       </Banner>
 
       {usable.length === 0 ? (
         <EmptyState title="No usable provider for this agent">
-          Add a provider for {agent === "codex" ? "Codex" : "Claude Code"} and enter
-          an API key, then come back.
+          Add a provider for {agent === "codex" ? "Codex" : "Claude Code"} and enter an API key,
+          then come back.
         </EmptyState>
       ) : (
         <PlaygroundForm profiles={usable} />
@@ -103,9 +91,7 @@ function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
       setResult(response);
     } catch (raw) {
       const api = raw as { message?: string; hint?: string };
-      setError(
-        [api.message ?? "The request failed.", api.hint].filter(Boolean).join(" "),
-      );
+      setError([api.message ?? "The request failed.", api.hint].filter(Boolean).join(" "));
     } finally {
       setBusy(false);
     }
@@ -186,13 +172,10 @@ function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
             </Badge>
             <span className="small dim mono">{latency(result.latencyMs)}</span>
             <span className="small dim mono">{result.model}</span>
-            {result.streaming && (
-              <Badge tone="info">Streamed</Badge>
-            )}
+            {result.streaming && <Badge tone="info">Streamed</Badge>}
             {result.promptTokens !== undefined && (
               <span className="small dim">
-                {result.promptTokens} in / {result.completionTokens ?? "?"} out
-                tokens
+                {result.promptTokens} in / {result.completionTokens ?? "?"} out tokens
               </span>
             )}
           </div>

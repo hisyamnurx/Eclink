@@ -94,10 +94,10 @@ pub async fn send(
     };
 
     if reply.trim().is_empty() {
-        return Err(BridgeError::provider_error(
-            "The provider returned an empty reply.",
-        )
-        .with_hint("Try a different model, or check the provider's status page."));
+        return Err(
+            BridgeError::provider_error("The provider returned an empty reply.")
+                .with_hint("Try a different model, or check the provider's status page."),
+        );
     }
 
     Ok(PlaygroundResult {
@@ -117,11 +117,11 @@ fn describe_failure(status: reqwest::StatusCode, body: &str) -> BridgeError {
     match status.as_u16() {
         401 | 403 => BridgeError::auth("The provider rejected your API key.")
             .with_hint("Check that the key is correct and still active, then save it again."),
-        404 => BridgeError::provider_error(
-            "The provider does not recognize that endpoint or model.",
-        )
-        .with_hint("Check the base URL and the model ID.")
-        .with_details(detail),
+        404 => {
+            BridgeError::provider_error("The provider does not recognize that endpoint or model.")
+                .with_hint("Check the base URL and the model ID.")
+                .with_details(detail)
+        }
         429 => BridgeError::rate_limited("The provider is rate limiting this key.")
             .with_hint("Wait a moment, then try again.")
             .with_details(detail),
@@ -130,8 +130,7 @@ fn describe_failure(status: reqwest::StatusCode, body: &str) -> BridgeError {
                 .with_hint("This is on the provider's side. Try again shortly.")
                 .with_details(detail)
         }
-        _ => BridgeError::provider_error("The provider rejected the request.")
-            .with_details(detail),
+        _ => BridgeError::provider_error("The provider rejected the request.").with_details(detail),
     }
 }
 

@@ -182,7 +182,9 @@ impl SecretStore {
     /// This is the only representation of an existing key that ever reaches the
     /// frontend (PRD §14, §51).
     pub fn fingerprint(&self, id: &str) -> BridgeResult<Option<String>> {
-        Ok(self.get(id)?.map(|secret| crate::diagnostics::redact::fingerprint(&secret)))
+        Ok(self
+            .get(id)?
+            .map(|secret| crate::diagnostics::redact::fingerprint(&secret)))
     }
 
     /// Delete a secret. Missing records are not an error.

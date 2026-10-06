@@ -486,7 +486,10 @@ mod tests {
                 ..Default::default()
             },
         );
-        assert!(!p.is_ready(), "one passing target must not mark Both as ready");
+        assert!(
+            !p.is_ready(),
+            "one passing target must not mark Both as ready"
+        );
 
         p.compatibility.insert(
             AgentId::Claude,

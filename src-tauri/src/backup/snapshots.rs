@@ -194,7 +194,13 @@ mod tests {
         let (_dir, store, config) = setup();
         std::fs::write(&config, "model = \"a\"\n").unwrap();
         let snap = store
-            .create("codex", &config, "activate_profile", Some("p1"), &["model".into()])
+            .create(
+                "codex",
+                &config,
+                "activate_profile",
+                Some("p1"),
+                &["model".into()],
+            )
             .unwrap();
 
         let loaded = store.get("codex", &snap.meta.id).unwrap().unwrap();
@@ -209,7 +215,9 @@ mod tests {
         let (_dir, store, config) = setup();
         for i in 0..3 {
             std::fs::write(&config, format!("v = {i}\n")).unwrap();
-            store.create("codex", &config, "activate_profile", None, &[]).unwrap();
+            store
+                .create("codex", &config, "activate_profile", None, &[])
+                .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         let list = store.list("codex").unwrap();
@@ -222,7 +230,9 @@ mod tests {
         let (_dir, store, config) = setup();
         for i in 0..25 {
             std::fs::write(&config, format!("v = {i}\n")).unwrap();
-            store.create("codex", &config, "activate_profile", None, &[]).unwrap();
+            store
+                .create("codex", &config, "activate_profile", None, &[])
+                .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         let list = store.list("codex").unwrap();
@@ -238,7 +248,9 @@ mod tests {
         let (_dir, store, config) = setup();
         for i in 0..24 {
             std::fs::write(&config, format!("v = {i}\n")).unwrap();
-            store.create("codex", &config, "activate_profile", None, &[]).unwrap();
+            store
+                .create("codex", &config, "activate_profile", None, &[])
+                .unwrap();
             std::thread::sleep(std::time::Duration::from_millis(2));
         }
         let dir = store.snapshot_dir("codex");
@@ -247,14 +259,19 @@ mod tests {
             .flatten()
             .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("content"))
             .count();
-        assert_eq!(payloads, SNAPSHOT_RETENTION, "orphan payloads must be pruned");
+        assert_eq!(
+            payloads, SNAPSHOT_RETENTION,
+            "orphan payloads must be pruned"
+        );
     }
 
     #[test]
     fn snapshots_are_isolated_per_agent() {
         let (_dir, store, config) = setup();
         std::fs::write(&config, "codex\n").unwrap();
-        store.create("codex", &config, "activate_profile", None, &[]).unwrap();
+        store
+            .create("codex", &config, "activate_profile", None, &[])
+            .unwrap();
         assert_eq!(store.list("claude").unwrap().len(), 0);
     }
 
@@ -267,7 +284,9 @@ mod tests {
     #[test]
     fn missing_config_snapshots_empty_content() {
         let (_dir, store, config) = setup();
-        let snap = store.create("codex", &config, "activate_profile", None, &[]).unwrap();
+        let snap = store
+            .create("codex", &config, "activate_profile", None, &[])
+            .unwrap();
         assert_eq!(snap.content, "");
         assert_eq!(snap.meta.bytes, 0);
     }
@@ -276,7 +295,9 @@ mod tests {
     fn corrupt_metadata_does_not_hide_valid_snapshots() {
         let (_dir, store, config) = setup();
         std::fs::write(&config, "good\n").unwrap();
-        let snap = store.create("codex", &config, "activate_profile", None, &[]).unwrap();
+        let snap = store
+            .create("codex", &config, "activate_profile", None, &[])
+            .unwrap();
         std::fs::write(store.snapshot_dir("codex").join("broken.json"), b"{oops").unwrap();
 
         let list = store.list("codex").unwrap();

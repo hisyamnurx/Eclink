@@ -5,7 +5,11 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.77"
+# 1.85 rather than the 1.77 floor Tauri 2 alone would allow: the codebase uses
+# `Option::is_none_or` (1.82), `is_unicast_link_local` (1.84), and the 2024
+# edition's `unsafe` attribute requirements (1.85). Declaring the real minimum
+# keeps `cargo clippy`'s MSRV lint meaningful instead of noisy.
+rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/hisyamnurx/Eclyzer-Bridge"
 authors = ["Eclyzer Bridge contributors"]

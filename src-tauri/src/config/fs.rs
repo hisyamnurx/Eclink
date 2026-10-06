@@ -83,9 +83,9 @@ pub fn apply_newline(text: &str, newline: &str) -> String {
 ///
 /// On any failure the destination keeps its previous contents.
 pub fn write_atomic(path: &Path, contents: &[u8]) -> BridgeResult<()> {
-    let parent = path.parent().ok_or_else(|| {
-        BridgeError::io("The configuration path has no parent directory.")
-    })?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| BridgeError::io("The configuration path has no parent directory."))?;
     std::fs::create_dir_all(parent)?;
 
     let mut temp = tempfile::Builder::new()
@@ -278,7 +278,10 @@ mod tests {
     fn detects_and_preserves_crlf() {
         let text = "a = 1\r\nb = 2\r\n";
         assert_eq!(detect_newline(text), "\r\n");
-        assert_eq!(apply_newline("a = 1\nb = 2\n", "\r\n"), "a = 1\r\nb = 2\r\n");
+        assert_eq!(
+            apply_newline("a = 1\nb = 2\n", "\r\n"),
+            "a = 1\r\nb = 2\r\n"
+        );
     }
 
     #[test]
@@ -298,14 +301,22 @@ mod tests {
         let lock_path = dir.path().join("codex-config.lock");
 
         let first = FileLock::acquire(&lock_path).unwrap();
-        assert!(FileLock::acquire(&lock_path).is_err(), "second acquire must fail");
+        assert!(
+            FileLock::acquire(&lock_path).is_err(),
+            "second acquire must fail"
+        );
         drop(first);
-        assert!(FileLock::acquire(&lock_path).is_ok(), "lock must be reusable");
+        assert!(
+            FileLock::acquire(&lock_path).is_ok(),
+            "lock must be reusable"
+        );
     }
 
     #[test]
     fn sha256_file_reports_none_for_missing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(sha256_file(&dir.path().join("nope.toml")).unwrap().is_none());
+        assert!(sha256_file(&dir.path().join("nope.toml"))
+            .unwrap()
+            .is_none());
     }
 }

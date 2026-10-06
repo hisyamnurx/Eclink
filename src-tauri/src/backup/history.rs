@@ -80,19 +80,20 @@ impl HistoryStore {
                 entries: Vec::new(),
             });
         }
-        serde_json::from_str(&raw).or_else(|err| {
-            // History is diagnostic data: losing it must never block a restore.
-            tracing::warn!(
-                target: "eclyzer_bridge",
-                error = %err,
-                "history.json is unreadable; starting a fresh ledger"
-            );
-            Ok::<HistoryFile, serde_json::Error>(HistoryFile {
-                version: 1,
-                entries: Vec::new(),
+        serde_json::from_str(&raw)
+            .or_else(|err| {
+                // History is diagnostic data: losing it must never block a restore.
+                tracing::warn!(
+                    target: "eclyzer_bridge",
+                    error = %err,
+                    "history.json is unreadable; starting a fresh ledger"
+                );
+                Ok::<HistoryFile, serde_json::Error>(HistoryFile {
+                    version: 1,
+                    entries: Vec::new(),
+                })
             })
-        })
-        .map_err(BridgeError::from)
+            .map_err(BridgeError::from)
     }
 
     fn save(&self, file: &HistoryFile) -> BridgeResult<()> {
@@ -236,9 +237,13 @@ mod tests {
     #[test]
     fn records_and_lists_newest_first() {
         let (_dir, store) = store();
-        store.record_success("codex", &reason("DeepSeek"), Some("s1")).unwrap();
+        store
+            .record_success("codex", &reason("DeepSeek"), Some("s1"))
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(2));
-        store.record_success("codex", &reason("Gateway"), Some("s2")).unwrap();
+        store
+            .record_success("codex", &reason("Gateway"), Some("s2"))
+            .unwrap();
 
         let list = store.list(Some("codex")).unwrap();
         assert_eq!(list.len(), 2);
@@ -249,8 +254,12 @@ mod tests {
     #[test]
     fn filters_by_agent() {
         let (_dir, store) = store();
-        store.record_success("codex", &reason("A"), Some("s1")).unwrap();
-        store.record_success("claude", &reason("B"), Some("s2")).unwrap();
+        store
+            .record_success("codex", &reason("A"), Some("s1"))
+            .unwrap();
+        store
+            .record_success("claude", &reason("B"), Some("s2"))
+            .unwrap();
         assert_eq!(store.list(Some("codex")).unwrap().len(), 1);
         assert_eq!(store.list(Some("claude")).unwrap().len(), 1);
         assert_eq!(store.list(None).unwrap().len(), 2);
@@ -259,7 +268,9 @@ mod tests {
     #[test]
     fn failed_attempts_are_recorded_but_not_undo_targets() {
         let (_dir, store) = store();
-        store.record_success("codex", &reason("Good"), Some("s1")).unwrap();
+        store
+            .record_success("codex", &reason("Good"), Some("s1"))
+            .unwrap();
         store
             .record_failure("codex", &MutationReason::RestoreDefault, "boom")
             .unwrap();
@@ -327,10 +338,15 @@ mod tests {
     #[test]
     fn history_file_never_stores_prompts_or_keys() {
         let (_dir, store) = store();
-        store.record_success("codex", &reason("P"), Some("s")).unwrap();
+        store
+            .record_success("codex", &reason("P"), Some("s"))
+            .unwrap();
         let raw = std::fs::read_to_string(store.path()).unwrap();
         for forbidden in ["sk-", "Bearer", "prompt", "apiKey"] {
-            assert!(!raw.contains(forbidden), "history contains {forbidden}: {raw}");
+            assert!(
+                !raw.contains(forbidden),
+                "history contains {forbidden}: {raw}"
+            );
         }
     }
 
@@ -343,7 +359,9 @@ mod tests {
         std::fs::write(store.path(), b"not json").unwrap();
         // Must not error: history is a convenience, not a source of truth.
         assert!(store.list(Some("codex")).unwrap().is_empty());
-        assert!(store.record_success("codex", &reason("X"), Some("s")).is_ok());
+        assert!(store
+            .record_success("codex", &reason("X"), Some("s"))
+            .is_ok());
         // The ledger recovers and is readable afterwards.
         assert_eq!(store.list(Some("codex")).unwrap().len(), 1);
     }
@@ -353,15 +371,21 @@ mod tests {
         // A fresh install has no `backups/` folder yet; recording must still work.
         let dir = tempfile::tempdir().unwrap();
         let store = HistoryStore::new(dir.path().join("backups"));
-        assert!(store.record_success("codex", &reason("X"), Some("s")).is_ok());
+        assert!(store
+            .record_success("codex", &reason("X"), Some("s"))
+            .is_ok());
         assert!(store.path().exists());
     }
 
     #[test]
     fn clear_scopes_to_agent() {
         let (_dir, store) = store();
-        store.record_success("codex", &reason("A"), Some("s1")).unwrap();
-        store.record_success("claude", &reason("B"), Some("s2")).unwrap();
+        store
+            .record_success("codex", &reason("A"), Some("s1"))
+            .unwrap();
+        store
+            .record_success("claude", &reason("B"), Some("s2"))
+            .unwrap();
         assert_eq!(store.clear(Some("codex")).unwrap(), 1);
         assert_eq!(store.list(Some("codex")).unwrap().len(), 0);
         assert_eq!(store.list(Some("claude")).unwrap().len(), 1);

@@ -165,7 +165,9 @@ mod tests {
     use chrono::TimeZone;
 
     fn at(hours_ago: i64) -> chrono::DateTime<chrono::Local> {
-        let now = chrono::Local.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 6, 1, 12, 0, 0)
+            .unwrap();
         now - chrono::Duration::hours(hours_ago)
     }
 
@@ -181,21 +183,27 @@ mod tests {
 
     #[test]
     fn a_recent_check_is_not_due() {
-        let now = chrono::Local.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 6, 1, 12, 0, 0)
+            .unwrap();
         let one_hour_ago = (now - chrono::Duration::hours(1)).to_rfc3339();
         assert!(!should_check_now(Some(&one_hour_ago), now));
     }
 
     #[test]
     fn a_check_older_than_the_interval_is_due() {
-        let now = chrono::Local.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 6, 1, 12, 0, 0)
+            .unwrap();
         let twenty_five_hours_ago = (now - chrono::Duration::hours(25)).to_rfc3339();
         assert!(should_check_now(Some(&twenty_five_hours_ago), now));
     }
 
     #[test]
     fn exactly_the_interval_is_due() {
-        let now = chrono::Local.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 6, 1, 12, 0, 0)
+            .unwrap();
         let exactly = (now - chrono::Duration::hours(CHECK_INTERVAL_HOURS)).to_rfc3339();
         assert!(should_check_now(Some(&exactly), now));
     }
@@ -203,7 +211,9 @@ mod tests {
     #[test]
     fn a_future_timestamp_does_not_panic() {
         // A clock change must not make the app check on every launch forever.
-        let now = chrono::Local.with_ymd_and_hms(2026, 6, 1, 12, 0, 0).unwrap();
+        let now = chrono::Local
+            .with_ymd_and_hms(2026, 6, 1, 12, 0, 0)
+            .unwrap();
         let future = (now + chrono::Duration::hours(48)).to_rfc3339();
         assert!(!should_check_now(Some(&future), now));
     }

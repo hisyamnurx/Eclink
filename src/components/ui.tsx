@@ -5,13 +5,7 @@
  * regions, status text) is implemented once rather than re-derived per screen.
  */
 
-import {
-  useEffect,
-  useId,
-  useRef,
-  type ReactNode,
-  type ButtonHTMLAttributes,
-} from "react";
+import { useEffect, useId, useRef, type ReactNode, type ButtonHTMLAttributes } from "react";
 
 import { ApiError } from "../lib/api";
 
@@ -72,14 +66,7 @@ interface FieldProps {
   children: ReactNode;
 }
 
-export function Field({
-  label,
-  htmlFor,
-  hint,
-  error,
-  required = false,
-  children,
-}: FieldProps) {
+export function Field({ label, htmlFor, hint, error, required = false, children }: FieldProps) {
   return (
     <div className="field">
       <label className="field__label" htmlFor={htmlFor}>
@@ -177,13 +164,7 @@ export function EmptyState({
   );
 }
 
-export function ErrorState({
-  error,
-  onRetry,
-}: {
-  error: unknown;
-  onRetry?: () => void;
-}) {
+export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   const api = error instanceof ApiError ? error : null;
   return (
     <div className="state" role="alert">
@@ -211,9 +192,7 @@ export function Meta({
       {items.map((item) => (
         <div key={item.key} style={{ display: "contents" }}>
           <div className="meta__key">{item.key}</div>
-          <div className={`meta__value${item.mono ? " meta__value--mono" : ""}`}>
-            {item.value}
-          </div>
+          <div className={`meta__value${item.mono ? " meta__value--mono" : ""}`}>{item.value}</div>
         </div>
       ))}
     </div>

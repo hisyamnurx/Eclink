@@ -183,25 +183,16 @@ function UpdateNotice() {
         title={`Eclyzer Bridge ${status.version} is available`}
         actions={
           <>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => setDismissed(true)}
-            >
+            <Button size="sm" variant="ghost" onClick={() => setDismissed(true)}>
               Not now
             </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={() => setDismissed(true)}
-            >
+            <Button size="sm" variant="secondary" onClick={() => setDismissed(true)}>
               Open Settings to install
             </Button>
           </>
         }
       >
-        You are running {status.currentVersion}. Open Settings to review and
-        install it.
+        You are running {status.currentVersion}. Open Settings to review and install it.
       </Banner>
     </div>
   );

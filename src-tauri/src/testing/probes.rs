@@ -66,7 +66,9 @@ impl ProbeOutcome {
             ProbeOutcome::Unsupported => "The endpoint does not support this API format.",
             ProbeOutcome::Unauthorized => "The API key was rejected.",
             ProbeOutcome::UnknownModel => "The endpoint does not recognize this model.",
-            ProbeOutcome::RateLimited => "The endpoint is rate limiting requests. Try again shortly.",
+            ProbeOutcome::RateLimited => {
+                "The endpoint is rate limiting requests. Try again shortly."
+            }
             ProbeOutcome::ServerError => "The endpoint returned a server error.",
             ProbeOutcome::Unreachable => "Could not connect to the endpoint.",
             ProbeOutcome::TimedOut => "The endpoint did not respond in time.",
@@ -140,8 +142,7 @@ impl ProbeTarget {
         auth_mode: AuthMode,
         timeout_ms: Option<u64>,
     ) -> BridgeResult<Self> {
-        crate::profiles::validate_base_url(base_url)
-            .map_err(|message| BridgeError::validation(message))?;
+        crate::profiles::validate_base_url(base_url).map_err(BridgeError::validation)?;
         if model.trim().is_empty() {
             return Err(
                 BridgeError::validation("A model name is required to test this endpoint.")
@@ -163,7 +164,11 @@ impl ProbeTarget {
 
     /// Join a path onto the base URL without doubling or dropping the slash.
     pub fn url(&self, path: &str) -> String {
-        format!("{}/{}", self.base_url.trim_end_matches('/'), path.trim_start_matches('/'))
+        format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 
     /// The client used for every probe.
@@ -380,8 +385,7 @@ pub async fn probe_reachability(target: &ProbeTarget) -> ProbeResult {
     let client = match target.client() {
         Ok(client) => client,
         Err(err) => {
-            return ProbeResult::new(ProbeOutcome::Unreachable, 0)
-                .with_detail(err.message.clone())
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
         }
     };
 
@@ -429,8 +433,7 @@ pub async fn probe_authentication(target: &ProbeTarget) -> ProbeResult {
     let request = match target.post("/v1/messages", body) {
         Ok(request) => request,
         Err(err) => {
-            return ProbeResult::new(ProbeOutcome::Unreachable, 0)
-                .with_detail(err.message.clone())
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
         }
     };
 
@@ -465,8 +468,7 @@ pub async fn probe_model(target: &ProbeTarget) -> ProbeResult {
     let client = match target.client() {
         Ok(client) => client,
         Err(err) => {
-            return ProbeResult::new(ProbeOutcome::Unreachable, 0)
-                .with_detail(err.message.clone())
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
         }
     };
     let request = target.apply_headers(client.get(target.url("/v1/models")));
@@ -481,8 +483,11 @@ pub async fn probe_model(target: &ProbeTarget) -> ProbeResult {
                     ProbeResult::new(ProbeOutcome::Supported, latency)
                         .with_detail("This endpoint does not list models; availability was confirmed by the protocol test.")
                 } else {
-                    ProbeResult::new(outcome, latency)
-                        .with_detail(format!("{} {}", status.as_u16(), error_detail(&body)))
+                    ProbeResult::new(outcome, latency).with_detail(format!(
+                        "{} {}",
+                        status.as_u16(),
+                        error_detail(&body)
+                    ))
                 };
             }
 
@@ -531,8 +536,7 @@ pub async fn probe_codex_protocol(target: &ProbeTarget) -> ProbeResult {
     let request = match target.post("/responses", body) {
         Ok(request) => request,
         Err(err) => {
-            return ProbeResult::new(ProbeOutcome::Unreachable, 0)
-                .with_detail(err.message.clone())
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
         }
     };
 
@@ -584,8 +588,7 @@ pub async fn probe_claude_protocol(target: &ProbeTarget) -> ProbeResult {
     let request = match target.post("/v1/messages", body) {
         Ok(request) => request,
         Err(err) => {
-            return ProbeResult::new(ProbeOutcome::Unreachable, 0)
-                .with_detail(err.message.clone())
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
         }
     };
 
@@ -593,8 +596,11 @@ pub async fn probe_claude_protocol(target: &ProbeTarget) -> ProbeResult {
         Ok((status, body, latency)) => {
             if !status.is_success() {
                 let outcome = classify_status(status, &body);
-                return ProbeResult::new(outcome, latency)
-                    .with_detail(format!("{} {}", status.as_u16(), error_detail(&body)));
+                return ProbeResult::new(outcome, latency).with_detail(format!(
+                    "{} {}",
+                    status.as_u16(),
+                    error_detail(&body)
+                ));
             }
 
             match serde_json::from_str::<serde_json::Value>(&body) {
@@ -652,8 +658,7 @@ pub async fn probe_streaming(target: &ProbeTarget, codex: bool) -> ProbeResult {
     let request = match target.post(path, body) {
         Ok(request) => request,
         Err(err) => {
-            return ProbeResult::new(ProbeOutcome::Unreachable, 0)
-                .with_detail(err.message.clone())
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
         }
     };
 
@@ -677,8 +682,11 @@ pub async fn probe_streaming(target: &ProbeTarget, codex: bool) -> ProbeResult {
         let body = response.text().await.unwrap_or_default();
         let latency = started.elapsed().as_millis() as u64;
         let outcome = classify_status(status, &body);
-        return ProbeResult::new(outcome, latency)
-            .with_detail(format!("{} {}", status.as_u16(), error_detail(&body)));
+        return ProbeResult::new(outcome, latency).with_detail(format!(
+            "{} {}",
+            status.as_u16(),
+            error_detail(&body)
+        ));
     }
 
     // Read incrementally with a hard cap so a stream that never ends cannot hang.
@@ -810,8 +818,7 @@ pub async fn probe_tool_calling(target: &ProbeTarget, codex: bool) -> ProbeResul
     let request = match target.post(path, body) {
         Ok(request) => request,
         Err(err) => {
-            return ProbeResult::new(ProbeOutcome::Unreachable, 0)
-                .with_detail(err.message.clone())
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
         }
     };
 
@@ -819,8 +826,11 @@ pub async fn probe_tool_calling(target: &ProbeTarget, codex: bool) -> ProbeResul
         Ok((status, body, latency)) => {
             if !status.is_success() {
                 let outcome = classify_status(status, &body);
-                return ProbeResult::new(outcome, latency)
-                    .with_detail(format!("{} {}", status.as_u16(), error_detail(&body)));
+                return ProbeResult::new(outcome, latency).with_detail(format!(
+                    "{} {}",
+                    status.as_u16(),
+                    error_detail(&body)
+                ));
             }
 
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
@@ -887,8 +897,14 @@ mod tests {
 
     #[test]
     fn url_joining_never_doubles_a_slash() {
-        assert_eq!(target().url("/responses"), "https://api.example.com/v1/responses");
-        assert_eq!(target().url("responses"), "https://api.example.com/v1/responses");
+        assert_eq!(
+            target().url("/responses"),
+            "https://api.example.com/v1/responses"
+        );
+        assert_eq!(
+            target().url("responses"),
+            "https://api.example.com/v1/responses"
+        );
     }
 
     #[test]
@@ -931,8 +947,10 @@ mod tests {
     #[test]
     fn a_bad_model_is_not_reported_as_a_protocol_mismatch() {
         // Both are 400s, but they need different user guidance.
-        let unknown =
-            classify_status(reqwest::StatusCode::BAD_REQUEST, r#"{"error":"model not found"}"#);
+        let unknown = classify_status(
+            reqwest::StatusCode::BAD_REQUEST,
+            r#"{"error":"model not found"}"#,
+        );
         assert_eq!(unknown, ProbeOutcome::UnknownModel);
 
         let malformed = classify_status(

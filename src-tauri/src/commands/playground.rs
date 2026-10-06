@@ -50,16 +50,10 @@ pub async fn playground_send(
 
     let agent = match agent {
         Some(value) => parse_agent(&value)?,
-        None => profile
-            .targets
-            .first()
-            .copied()
-            .ok_or_else(|| {
-                BridgeError::validation(
-                    "This provider is not set up for a coding agent yet.",
-                )
+        None => profile.targets.first().copied().ok_or_else(|| {
+            BridgeError::validation("This provider is not set up for a coding agent yet.")
                 .with_hint("Edit the provider and choose Codex or Claude Code.")
-            })?,
+        })?,
     };
 
     let secret = crate::testing::pipeline::resolve_secret(state.secrets(), &profile)?;

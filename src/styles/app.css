@@ -176,7 +176,9 @@ code,
   display: flex;
   align-items: center;
   gap: var(--space-3);
-  transition: background var(--motion), color var(--motion);
+  transition:
+    background var(--motion),
+    color var(--motion);
   width: 100%;
 }
 
@@ -347,7 +349,10 @@ code,
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  transition: background var(--motion), border-color var(--motion), color var(--motion);
+  transition:
+    background var(--motion),
+    border-color var(--motion),
+    color var(--motion);
   white-space: nowrap;
 }
 
@@ -486,10 +491,15 @@ code,
 
 .select {
   cursor: pointer;
-  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
     linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
-  background-position: calc(100% - 17px) 50%, calc(100% - 12px) 50%;
-  background-size: 5px 5px, 5px 5px;
+  background-position:
+    calc(100% - 17px) 50%,
+    calc(100% - 12px) 50%;
+  background-size:
+    5px 5px,
+    5px 5px;
   background-repeat: no-repeat;
   padding-right: 30px;
 }
@@ -527,7 +537,9 @@ code,
   cursor: pointer;
   display: grid;
   place-content: center;
-  transition: background var(--motion), border-color var(--motion);
+  transition:
+    background var(--motion),
+    border-color var(--motion);
 }
 
 .checkbox input:checked {
@@ -1011,7 +1023,9 @@ code,
 
 button.list-row {
   cursor: pointer;
-  transition: border-color var(--motion), background var(--motion);
+  transition:
+    border-color var(--motion),
+    background var(--motion);
 }
 
 button.list-row:hover {

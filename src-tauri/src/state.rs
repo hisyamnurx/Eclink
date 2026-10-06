@@ -122,7 +122,8 @@ fn settings_from_lenient(raw: &str, error: &str) -> AppSettings {
                 }
             }
             "logLevel" => {
-                if let Ok(level) = serde_json::from_value::<crate::diagnostics::LogLevel>(value.clone())
+                if let Ok(level) =
+                    serde_json::from_value::<crate::diagnostics::LogLevel>(value.clone())
                 {
                     settings.log_level = level;
                 }
@@ -145,8 +146,7 @@ pub fn save_settings(paths: &AppPaths, settings: &AppSettings) -> BridgeResult<(
     let mut to_write = settings.clone();
     to_write.schema_version = APP_SETTINGS_SCHEMA_VERSION;
     let json = serde_json::to_string_pretty(&to_write).map_err(|err| {
-        BridgeError::internal("Could not save application settings.")
-            .with_details(err.to_string())
+        BridgeError::internal("Could not save application settings.").with_details(err.to_string())
     })?;
     write_atomic(&paths.app_json(), json.as_bytes())
 }
@@ -168,9 +168,11 @@ mod tests {
     fn round_trips() {
         let dir = tempfile::tempdir().unwrap();
         let paths = AppPaths::with_root(dir.path());
-        let mut settings = AppSettings::default();
-        settings.last_project_directory = Some(r"C:\Users\Test User\My Project\".into());
-        settings.first_run_complete = true;
+        let settings = AppSettings {
+            last_project_directory: Some(r"C:\Users\Test User\My Project\".into()),
+            first_run_complete: true,
+            ..AppSettings::default()
+        };
         save_settings(&paths, &settings).unwrap();
 
         let reloaded = load_settings(&paths).unwrap();
@@ -197,7 +199,10 @@ mod tests {
         std::fs::write(paths.app_json(), br#"{"updateCheck": false}"#).unwrap();
         let settings = load_settings(&paths).unwrap();
         assert!(!settings.update_check, "explicit value must win");
-        assert!(settings.remember_project_directory, "missing field must default");
+        assert!(
+            settings.remember_project_directory,
+            "missing field must default"
+        );
     }
 
     #[test]
@@ -207,7 +212,10 @@ mod tests {
         save_settings(&paths, &AppSettings::default()).unwrap();
         let raw = std::fs::read_to_string(paths.app_json()).unwrap();
         for forbidden in ["apiKey", "api_key", "sk-", "Authorization", "Bearer"] {
-            assert!(!raw.contains(forbidden), "app.json leaked {forbidden}: {raw}");
+            assert!(
+                !raw.contains(forbidden),
+                "app.json leaked {forbidden}: {raw}"
+            );
         }
     }
 }

@@ -114,9 +114,7 @@ pub fn build_launch_plan(
     let display = if is_wt {
         format!("wt -d \"{workdir_str}\" -- \"{exe_str}\"")
     } else {
-        format!(
-            "Set-Location -LiteralPath \"{workdir_str}\"; & \"{exe_str}\""
-        )
+        format!("Set-Location -LiteralPath \"{workdir_str}\"; & \"{exe_str}\"")
     };
 
     Ok(LaunchPlan {
@@ -139,16 +137,16 @@ pub fn normalize_project_dir(project_dir: &Path) -> BridgeResult<PathBuf> {
     }
     let path = PathBuf::from(&trimmed);
     if !path.exists() {
-        return Err(BridgeError::validation(
-            "That project folder does not exist.",
-        )
-        .with_hint("Pick an existing folder."));
+        return Err(
+            BridgeError::validation("That project folder does not exist.")
+                .with_hint("Pick an existing folder."),
+        );
     }
     if !path.is_dir() {
-        return Err(BridgeError::validation(
-            "The project path is a file, not a folder.",
-        )
-        .with_hint("Pick a folder."));
+        return Err(
+            BridgeError::validation("The project path is a file, not a folder.")
+                .with_hint("Pick a folder."),
+        );
     }
     // Canonicalising resolves `..` and short (8.3) names so the launched
     // process' working directory is unambiguous.
@@ -353,8 +351,7 @@ mod tests {
         let (_, is_wt) = resolve_terminal();
         if is_wt {
             // Windows Terminal path: no shell string at all.
-            let plan =
-                build_launch_plan(AgentId::Codex, Path::new("codex.exe"), &tricky).unwrap();
+            let plan = build_launch_plan(AgentId::Codex, Path::new("codex.exe"), &tricky).unwrap();
             assert!(plan.args.contains(&"--".to_string()));
             return;
         }
@@ -362,14 +359,20 @@ mod tests {
         let plan = build_launch_plan(AgentId::Codex, Path::new("codex.exe"), &tricky).unwrap();
         let script = plan.args.last().unwrap();
         assert!(script.contains("Set-Location -LiteralPath"), "{script}");
-        assert!(script.contains("''"), "single quote must be escaped: {script}");
+        assert!(
+            script.contains("''"),
+            "single quote must be escaped: {script}"
+        );
     }
 
     #[test]
     fn launch_plan_rejects_bad_directory() {
-        let err =
-            build_launch_plan(AgentId::Codex, Path::new("codex.exe"), Path::new(r"C:\nope\nope"))
-                .unwrap_err();
+        let err = build_launch_plan(
+            AgentId::Codex,
+            Path::new("codex.exe"),
+            Path::new(r"C:\nope\nope"),
+        )
+        .unwrap_err();
         assert_eq!(err.kind, crate::error::ErrorKind::Validation);
     }
 
@@ -401,8 +404,8 @@ mod tests {
     #[test]
     fn display_string_is_readable() {
         let dir = project();
-        let plan =
-            build_launch_plan(AgentId::Codex, Path::new(r"C:\tools\codex.exe"), dir.path()).unwrap();
+        let plan = build_launch_plan(AgentId::Codex, Path::new(r"C:\tools\codex.exe"), dir.path())
+            .unwrap();
         assert!(!plan.display.is_empty());
         assert!(plan.display.contains("codex.exe"));
     }

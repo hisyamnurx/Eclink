@@ -180,10 +180,7 @@ export interface ApplyOutcome {
   };
 }
 
-export type CredentialMode =
-  | "credential_helper"
-  | "settings_file"
-  | "environment_variable";
+export type CredentialMode = "credential_helper" | "settings_file" | "environment_variable";
 
 export interface ActivationResult extends ApplyOutcome {
   message: string;
@@ -399,10 +396,7 @@ export type CommandName = keyof Commands;
  * serialized error payload, which may arrive as a string. Normalising here means
  * no component ever has to parse an error itself.
  */
-export type InvokeFn = (
-  command: string,
-  args?: Record<string, unknown>,
-) => Promise<unknown>;
+export type InvokeFn = (command: string, args?: Record<string, unknown>) => Promise<unknown>;
 
 let invokeImpl: InvokeFn | null = null;
 
@@ -448,12 +442,20 @@ export function toApiError(raw: unknown): ApiError {
   // Tauri serializes a `Result::Err` payload as-is, but a transport-level
   // failure arrives as a bare string.
   if (typeof raw === "string") {
-    return new ApiError({ kind: "internal", message: raw });
+    // An empty string is not a message worth showing; fall through to the
+    // generic copy rather than rendering a blank dialog.
+    if (raw.trim()) {
+      return new ApiError({ kind: "internal", message: raw });
+    }
+    return new ApiError({
+      kind: "internal",
+      message: "Something went wrong in Eclyzer Bridge.",
+    });
   }
 
   if (raw && typeof raw === "object") {
     const candidate = raw as Partial<CommandError>;
-    if (typeof candidate.message === "string") {
+    if (typeof candidate.message === "string" && candidate.message.trim()) {
       return new ApiError({
         kind: candidate.kind ?? "internal",
         message: candidate.message,
@@ -461,8 +463,9 @@ export function toApiError(raw: unknown): ApiError {
         details: candidate.details,
       });
     }
-    // A thrown Error from the bridge itself.
-    if (raw instanceof Error) {
+    // A thrown Error from the bridge itself. `String(error)` is used rather than
+    // `error.message` because a non-Error object may still stringify usefully.
+    if (raw instanceof Error && raw.message.trim()) {
       return new ApiError({ kind: "internal", message: raw.message });
     }
   }

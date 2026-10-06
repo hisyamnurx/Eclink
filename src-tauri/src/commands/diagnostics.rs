@@ -66,7 +66,7 @@ pub async fn reveal_data_directory(
     app: tauri::AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> CommandResult<()> {
-    open_in_file_manager(&app, &state.paths().root().to_path_buf()).map_err(Into::into)
+    open_in_file_manager(&app, state.paths().root()).map_err(Into::into)
 }
 
 /// Open the log directory.
@@ -88,11 +88,10 @@ fn open_in_file_manager(app: &tauri::AppHandle, path: &std::path::Path) -> Bridg
     use tauri_plugin_opener::OpenerExt;
 
     if !path.exists() {
-        return Err(BridgeError::io(format!(
-            "The folder {} does not exist yet.",
-            path.display()
-        ))
-        .with_hint("It is created the first time Eclyzer Bridge saves something."));
+        return Err(
+            BridgeError::io(format!("The folder {} does not exist yet.", path.display()))
+                .with_hint("It is created the first time Eclyzer Bridge saves something."),
+        );
     }
     if !path.is_dir() {
         return Err(BridgeError::io(format!(

@@ -112,8 +112,8 @@ fn resolve(id: &str) -> Result<String, String> {
     }
 
     let path = secrets_path()?;
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|_| format!("could not read {}", path.display()))?;
+    let raw =
+        std::fs::read_to_string(&path).map_err(|_| format!("could not read {}", path.display()))?;
 
     let data: SecretStoreData =
         serde_json::from_str(&raw).map_err(|_| "the secret store is unreadable".to_string())?;
@@ -140,7 +140,7 @@ fn unprotect(sealed: &[u8]) -> Result<Vec<u8>, String> {
         CryptUnprotectData, CRYPTPROTECT_UI_FORBIDDEN, CRYPT_INTEGER_BLOB,
     };
 
-    let mut input = CRYPT_INTEGER_BLOB {
+    let input = CRYPT_INTEGER_BLOB {
         cbData: sealed.len() as u32,
         pbData: sealed.as_ptr() as *mut u8,
     };
@@ -149,7 +149,7 @@ fn unprotect(sealed: &[u8]) -> Result<Vec<u8>, String> {
     // SAFETY: `input` points at a live slice for the duration of the call.
     let ok = unsafe {
         CryptUnprotectData(
-            &mut input,
+            &input,
             None,
             None,
             None,

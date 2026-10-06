@@ -172,7 +172,10 @@ mod tests {
         // test would flag the design regression.
         let json = serde_json::to_string(&provider_templates()).unwrap();
         for forbidden in ["apiKey", "api_key", "sk-", "Bearer"] {
-            assert!(!json.contains(forbidden), "template catalog leaked {forbidden}");
+            assert!(
+                !json.contains(forbidden),
+                "template catalog leaked {forbidden}"
+            );
         }
     }
 

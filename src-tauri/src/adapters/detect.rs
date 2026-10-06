@@ -96,11 +96,7 @@ pub fn clean_version(line: &str) -> String {
     // Prefer the first token that starts with a digit.
     for token in trimmed.split_whitespace() {
         let candidate = token.trim_start_matches('v');
-        if candidate
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_ascii_digit())
-        {
+        if candidate.chars().next().is_some_and(|c| c.is_ascii_digit()) {
             return token.trim_start_matches('v').to_string();
         }
     }
@@ -170,10 +166,7 @@ pub fn first_existing(candidates: &[PathBuf]) -> Option<PathBuf> {
 ///
 /// Honours the agent's documented environment override before falling back to
 /// the default under the user profile (PRD §14.1, §14.2, §16.1, §17.1).
-pub fn resolve_config_dir(
-    env_var: &str,
-    default_dir: PathBuf,
-) -> (PathBuf, bool) {
+pub fn resolve_config_dir(env_var: &str, default_dir: PathBuf) -> (PathBuf, bool) {
     match std::env::var(env_var) {
         Ok(value) if !value.trim().is_empty() => {
             // The value may embed `~`, which the agent itself expands.
@@ -262,7 +255,10 @@ mod tests {
                 text.starts_with(r"C:\Users\Test User"),
                 "location must be derived from home: {text}"
             );
-            assert!(!text.contains("hisya"), "no developer machine paths: {text}");
+            assert!(
+                !text.contains("hisya"),
+                "no developer machine paths: {text}"
+            );
         }
     }
 

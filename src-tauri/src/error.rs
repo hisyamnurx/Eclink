@@ -190,7 +190,9 @@ impl From<std::io::Error> for BridgeError {
         // in the message and hint so the UI can still give useful guidance.
         let kind = ErrorKind::Io;
         let message = match err.kind() {
-            std::io::ErrorKind::PermissionDenied => "Eclyzer Bridge cannot write to the config file.",
+            std::io::ErrorKind::PermissionDenied => {
+                "Eclyzer Bridge cannot write to the config file."
+            }
             std::io::ErrorKind::NotFound => "The requested file or folder was not found.",
             _ => "A file operation failed.",
         };

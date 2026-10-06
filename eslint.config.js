@@ -5,7 +5,16 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist", "node_modules", "src-tauri/target", "coverage"],
+    // `target` is the shared Cargo output directory at the repository root; it
+    // contains generated Tauri assets that are not source and must not be linted.
+    ignores: [
+      "dist",
+      "node_modules",
+      "target",
+      "src-tauri/target",
+      "coverage",
+      "**/*.d.ts",
+    ],
   },
   {
     files: ["**/*.{ts,tsx}"],
@@ -30,6 +39,13 @@ export default tseslint.config(
       "no-console": ["error", { allow: ["warn", "error"] }],
       eqeqeq: ["error", "always"],
       "prefer-const": "error",
+    },
+  },
+  {
+    // Config and tooling files run in Node, not the browser.
+    files: ["*.config.{js,ts}", "vite.config.ts"],
+    languageOptions: {
+      globals: { ...globals.node },
     },
   },
 );

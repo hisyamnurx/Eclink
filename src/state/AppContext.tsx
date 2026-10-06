@@ -85,23 +85,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setToasts((current) => current.filter((toast) => toast.id !== id));
   }, []);
 
-  const notify = useCallback(
-    (tone: Toast["tone"], title: string, text?: string) => {
-      const id = ++toastSeq;
-      setToasts((current) => [...current, { id, tone, title, text }]);
+  const notify = useCallback((tone: Toast["tone"], title: string, text?: string) => {
+    const id = ++toastSeq;
+    setToasts((current) => [...current, { id, tone, title, text }]);
 
-      // Errors stay until dismissed: a user may need to read the hint. Success
-      // and info messages clear themselves.
-      if (tone !== "error") {
-        const timer = setTimeout(() => {
-          timers.current.delete(id);
-          setToasts((current) => current.filter((toast) => toast.id !== id));
-        }, 4500);
-        timers.current.set(id, timer);
-      }
-    },
-    [],
-  );
+    // Errors stay until dismissed: a user may need to read the hint. Success
+    // and info messages clear themselves.
+    if (tone !== "error") {
+      const timer = setTimeout(() => {
+        timers.current.delete(id);
+        setToasts((current) => current.filter((toast) => toast.id !== id));
+      }, 4500);
+      timers.current.set(id, timer);
+    }
+  }, []);
 
   useEffect(() => {
     const map = timers.current;
@@ -162,26 +159,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const saveSettings = useCallback(
-    async (patch: Partial<AppSettings>) => {
-      // Send only the fields the backend accepts. `lastProjectDirectory` is
-      // included because the backend writes it when the user launches with
-      // "remember this folder" enabled.
-      const result = await call("update_settings", {
-        patch: {
-          updateCheck: patch.updateCheck,
-          rememberProjectDirectory: patch.rememberProjectDirectory,
-          logLevel: patch.logLevel,
-          firstRunComplete: patch.firstRunComplete,
-          costNoticeSeen: patch.costNoticeSeen,
-          insecureEndpointNoticeSeen: patch.insecureEndpointNoticeSeen,
-          lastProjectDirectory: patch.lastProjectDirectory,
-        },
-      });
-      setSettings(result);
-    },
-    [],
-  );
+  const saveSettings = useCallback(async (patch: Partial<AppSettings>) => {
+    // Send only the fields the backend accepts. `lastProjectDirectory` is
+    // included because the backend writes it when the user launches with
+    // "remember this folder" enabled.
+    const result = await call("update_settings", {
+      patch: {
+        updateCheck: patch.updateCheck,
+        rememberProjectDirectory: patch.rememberProjectDirectory,
+        logLevel: patch.logLevel,
+        firstRunComplete: patch.firstRunComplete,
+        costNoticeSeen: patch.costNoticeSeen,
+        insecureEndpointNoticeSeen: patch.insecureEndpointNoticeSeen,
+        lastProjectDirectory: patch.lastProjectDirectory,
+      },
+    });
+    setSettings(result);
+  }, []);
 
   const activeProfileFor = useCallback(
     (agent: string) =>
@@ -189,8 +183,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         Object.entries(profile.compatibility ?? {}).some(
           ([key, record]) =>
             key === agent &&
-            (record?.status === "compatible" ||
-              record?.status === "partially_compatible"),
+            (record?.status === "compatible" || record?.status === "partially_compatible"),
         ),
       ),
     [profiles],

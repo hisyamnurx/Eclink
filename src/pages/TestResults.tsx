@@ -103,9 +103,7 @@ export function TestResults({
           onClick={() =>
             void copyToClipboard(formatOutcome(outcome))
               .then(() => notify("success", "Test results copied."))
-              .catch(() =>
-                notify("error", "Could not copy the test results."),
-              )
+              .catch(() => notify("error", "Could not copy the test results."))
           }
         >
           Copy results
@@ -118,10 +116,7 @@ export function TestResults({
 function StepRow({ step }: { step: TestStep }) {
   return (
     <div className="step">
-      <span
-        className={`step__state step__state--${step.state}`}
-        aria-hidden="true"
-      >
+      <span className={`step__state step__state--${step.state}`} aria-hidden="true">
         {STEP_ICON[step.state]}
       </span>
       <div>
