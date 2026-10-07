@@ -329,4 +329,166 @@ mod tests {
         assert!(settings.cost_notice_seen);
         assert!(settings.insecure_endpoint_notice_seen);
     }
+
+    #[test]
+    fn the_default_language_is_english() {
+        // The product decision: an installation starts in English regardless of the
+        // machine's locale, and the user opts into Indonesian.
+        assert_eq!(AppSettings::default().language, "en");
+    }
+
+    #[test]
+    fn a_supported_language_is_stored() {
+        for language in SUPPORTED_LANGUAGES {
+            let mut settings = AppSettings::default();
+            apply_patch(
+                &mut settings,
+                &SettingsPatch {
+                    language: Some(language.to_string()),
+                    ..SettingsPatch::default()
+                },
+            );
+            assert_eq!(settings.language, language);
+        }
+    }
+
+    #[test]
+    fn a_language_tag_is_normalised_before_it_is_stored() {
+        let mut settings = AppSettings::default();
+        apply_patch(
+            &mut settings,
+            &SettingsPatch {
+                language: Some("  ID  ".to_string()),
+                ..SettingsPatch::default()
+            },
+        );
+        assert_eq!(settings.language, "id");
+    }
+
+    #[test]
+    fn an_unsupported_language_is_refused_rather_than_stored() {
+        // Storing it would leave the interface with no dictionary to read and render
+        // a blank screen. The previous choice must survive a bad value.
+        let mut settings = AppSettings {
+            language: "id".to_string(),
+            ..AppSettings::default()
+        };
+        for bad in ["fr", "", "  ", "english", "en-US", "<script>"] {
+            apply_patch(
+                &mut settings,
+                &SettingsPatch {
+                    language: Some(bad.to_string()),
+                    ..SettingsPatch::default()
+                },
+            );
+            assert_eq!(
+                settings.language, "id",
+                "\"{bad}\" was accepted as a language"
+            );
+        }
+    }
+
+    #[test]
+    fn a_patch_without_a_language_leaves_the_choice_alone() {
+        // Every other screen sends partial patches, so a missing field must not
+        // reset the language.
+        let mut settings = AppSettings {
+            language: "id".to_string(),
+            ..AppSettings::default()
+        };
+        apply_patch(
+            &mut settings,
+            &SettingsPatch {
+                update_check: Some(false),
+                ..SettingsPatch::default()
+            },
+        );
+        assert_eq!(settings.language, "id");
+    }
+
+    #[test]
+    fn the_supported_languages_match_the_frontend_dictionary_list() {
+        // The two lists have to agree or the picker would offer a language the
+        // backend refuses, or the backend would accept one the frontend cannot
+        // render. The frontend list is read from its source, because nothing else
+        // connects the two sides.
+        let i18n = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("the crate is inside the repository")
+                .join("src")
+                .join("lib")
+                .join("i18n.ts"),
+        )
+        .expect("the frontend dictionary is readable");
+
+        let declaration = i18n
+            .split("export const LANGUAGES")
+            .nth(1)
+            .expect("LANGUAGES is declared");
+        let list = &declaration[..declaration.find(']').unwrap_or(declaration.len())];
+
+        for language in SUPPORTED_LANGUAGES {
+            assert!(
+                list.contains(&format!("\"{language}\"")),
+                "the backend supports \"{language}\" but the frontend does not offer it"
+            );
+        }
+        // And nothing the frontend offers is missing here.
+        let offered = list.matches('"').count() / 2;
+        assert_eq!(
+            offered,
+            SUPPORTED_LANGUAGES.len(),
+            "the frontend offers {offered} languages but the backend accepts {}",
+            SUPPORTED_LANGUAGES.len()
+        );
+    }
+
+    #[test]
+    fn a_settings_file_without_a_language_reads_as_english() {
+        // The migration path: an `app.json` written before the field existed must
+        // still load, and must not guess at the machine's locale.
+        let parsed: AppSettings = serde_json::from_str(
+            r#"{
+              "schemaVersion": 1,
+              "updateCheck": true,
+              "rememberProjectDirectory": true,
+              "logLevel": "info",
+              "firstRunComplete": false,
+              "costNoticeSeen": true,
+              "insecureEndpointNoticeSeen": false
+            }"#,
+        )
+        .expect("an older settings file must load");
+
+        assert_eq!(parsed.language, "en");
+        assert!(parsed.cost_notice_seen, "the other fields still load");
+    }
+
+    #[test]
+    fn the_language_survives_a_real_save_and_load() {
+        // The persistence claim, exercised through the filesystem rather than by
+        // inspecting the in-memory value.
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let paths = crate::paths::AppPaths::with_root(dir.path());
+        paths.ensure_dirs().expect("create dirs");
+
+        let mut settings = crate::state::load_settings(&paths).expect("load defaults");
+        assert_eq!(settings.language, "en", "a fresh install starts in English");
+
+        apply_patch(
+            &mut settings,
+            &SettingsPatch {
+                language: Some("id".to_string()),
+                ..SettingsPatch::default()
+            },
+        );
+        crate::state::save_settings(&paths, &settings).expect("save");
+
+        let reloaded = crate::state::load_settings(&paths).expect("reload");
+        assert_eq!(
+            reloaded.language, "id",
+            "the chosen language did not survive a restart"
+        );
+    }
 }
