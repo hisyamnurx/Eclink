@@ -148,5 +148,39 @@ fn gateway(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // The Playground, through the same endpoint and credential. This is the check
+    // that matters most: a provider the compatibility test accepts must also work in
+    // the Playground, or a user is told something works and then cannot use it. The
+    // two used to hold separate parsers and disagreed about a streamed reply.
+    for protocol in [
+        eclyzer_bridge_lib::profiles::ApiProtocol::AnthropicMessages,
+        eclyzer_bridge_lib::profiles::ApiProtocol::OpenAiResponses,
+    ] {
+        let target = eclyzer_bridge_lib::testing::probes::ProbeTarget::new(
+            &base_url,
+            &model,
+            Secret::new(key.clone()),
+            AuthMode::XApiKey,
+            Some(30_000),
+        )?;
+        match runtime.block_on(eclyzer_bridge_lib::testing::playground::send(
+            &target, "halo", protocol,
+        )) {
+            Ok(result) => println!(
+                "\nPlayground {protocol:?}: OK  framing={} streaming={} latency={}ms tokens={:?}/{:?}\n  reply: {}",
+                result.framing,
+                result.streaming,
+                result.latency_ms,
+                result.prompt_tokens,
+                result.completion_tokens,
+                result.text.replace('\n', " ")
+            ),
+            Err(err) => println!(
+                "\nPlayground {protocol:?}: FAILED  code={:?} message={} details={:?}",
+                err.code, err.message, err.details
+            ),
+        }
+    }
+
     Ok(())
 }

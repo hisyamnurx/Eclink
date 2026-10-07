@@ -707,64 +707,29 @@ pub async fn probe_codex_protocol(target: &ProbeTarget) -> ProbeResult {
             }
 
             // A success must still look like a Responses payload. As with the
-            // Anthropic probe, a translating gateway may answer with an event stream
-            // even though `stream` was false, so a streamed reply counts as support
-            // rather than as "not JSON".
-            match responses_reply_shape(&body) {
-                AnthropicReply::Message => ProbeResult::new(ProbeOutcome::Supported, latency),
-                AnthropicReply::Stream { events } => {
-                    ProbeResult::new(ProbeOutcome::Supported, latency).with_detail(format!(
-                        "The endpoint answered with an event stream ({events} event(s)) \
-                         rather than a single JSON body, which translating gateways do."
-                    ))
-                }
-                AnthropicReply::NotAnthropic => {
-                    ProbeResult::new(ProbeOutcome::Unsupported, latency)
-                        .with_detail("The endpoint answered but not with a Responses API payload.")
-                }
-                AnthropicReply::NotJson => ProbeResult::new(ProbeOutcome::Unsupported, latency)
-                    .with_detail("The endpoint answered with something that is not JSON."),
+            // Anthropic probe, this goes through the shared reader, so the Playground
+            // and the probe cannot disagree about what a valid reply is.
+            if !crate::testing::response::looks_like_a_reply(
+                crate::profiles::ApiProtocol::OpenAiResponses,
+                &body,
+            ) {
+                return ProbeResult::new(ProbeOutcome::Unsupported, latency)
+                    .with_detail("The endpoint answered but not with a Responses API payload.");
+            }
+
+            let parsed = crate::testing::response::parse_responses(&body);
+            let result = ProbeResult::new(ProbeOutcome::Supported, latency);
+            if parsed.framing == Some(crate::testing::response::Framing::EventStream) {
+                let events = crate::testing::response::parse_sse(&body).len();
+                result.with_detail(format!(
+                    "The endpoint answered with an event stream ({events} event(s)) \
+                     rather than a single JSON body, which translating gateways do."
+                ))
+            } else {
+                result
             }
         }
         Err(result) => result,
-    }
-}
-
-/// Recognise a Responses API reply, in either a JSON body or an event stream.
-fn responses_reply_shape(body: &str) -> AnthropicReply {
-    let trimmed = body.trim_start();
-
-    if is_event_stream(trimmed) {
-        let events = trimmed
-            .lines()
-            .filter(|line| line.trim_start().starts_with("data:"))
-            .count();
-        if events == 0 {
-            return AnthropicReply::NotJson;
-        }
-        let looks_responses = trimmed.contains("response.created")
-            || trimmed.contains("response.output")
-            || trimmed.contains("response.completed")
-            || trimmed.contains("\"object\":\"response\"");
-        return if looks_responses {
-            AnthropicReply::Stream { events }
-        } else {
-            AnthropicReply::NotAnthropic
-        };
-    }
-
-    match serde_json::from_str::<serde_json::Value>(trimmed) {
-        Ok(value) => {
-            let has_output = value.get("output").is_some()
-                || value.get("output_text").is_some()
-                || value.get("id").is_some();
-            if has_output {
-                AnthropicReply::Message
-            } else {
-                AnthropicReply::NotAnthropic
-            }
-        }
-        Err(_) => AnthropicReply::NotJson,
     }
 }
 
@@ -1017,12 +982,10 @@ pub async fn probe_chat_completions(target: &ProbeTarget) -> ProbeResult {
 /// * an SSE stream of `message_start` / `content_block_delta` events, which a
 ///   gateway returns **even when `stream` was not requested**.
 ///
-/// The second case was the reported false negative. the gateway answers a plain
-/// non-streaming request with `Content-Type: text/event-stream`, the reply failed
-/// `serde_json::from_str`, and the pipeline reported "does not serve Anthropic
-/// Messages". Verified directly against a running the gateway: `POST /v1/messages`
-/// with an `x-api-key` and `anthropic-version` returns `200` and a valid
-/// `message_start` stream, so the endpoint does work and the probe was wrong.
+/// Both are recognised by `testing::response`, which the Playground uses too. They
+/// used to hold separate parsers, and the disagreement was visible: a profile passed
+/// 7/7 checks and then failed in the Playground with "the reply was not in the format
+/// this endpoint should use".
 pub async fn probe_claude_protocol(target: &ProbeTarget) -> ProbeResult {
     let body = json!({
         "model": target.model,
@@ -1047,103 +1010,36 @@ pub async fn probe_claude_protocol(target: &ProbeTarget) -> ProbeResult {
                 ));
             }
 
-            match anthropic_reply_shape(&body) {
-                AnthropicReply::Message => ProbeResult::new(ProbeOutcome::Supported, latency),
-                // A streamed reply proves the route exists and speaks the
-                // protocol; the streaming step measures it properly afterwards.
-                AnthropicReply::Stream { events } => {
-                    ProbeResult::new(ProbeOutcome::Supported, latency).with_detail(format!(
+            if !crate::testing::response::looks_like_a_reply(
+                crate::profiles::ApiProtocol::AnthropicMessages,
+                &body,
+            ) {
+                return ProbeResult::new(ProbeOutcome::Unsupported, latency).with_detail(
+                    "The endpoint answered but not with an Anthropic Messages payload.",
+                );
+            }
+
+            let parsed = crate::testing::response::parse_anthropic(&body);
+            let detail = match parsed.framing {
+                Some(crate::testing::response::Framing::EventStream) => {
+                    let events = crate::testing::response::parse_sse(&body).len();
+                    format!(
                         "The endpoint answered with an Anthropic event stream \
                          ({events} event(s)), which is expected from a gateway that \
                          translates to another API internally."
-                    ))
-                }
-                AnthropicReply::NotAnthropic => {
-                    ProbeResult::new(ProbeOutcome::Unsupported, latency).with_detail(
-                        "The endpoint answered but not with an Anthropic Messages payload.",
                     )
                 }
-                AnthropicReply::NotJson => ProbeResult::new(ProbeOutcome::Unsupported, latency)
-                    .with_detail("The endpoint answered with something that is not JSON."),
+                _ => String::new(),
+            };
+            let result = ProbeResult::new(ProbeOutcome::Supported, latency);
+            if detail.is_empty() {
+                result
+            } else {
+                result.with_detail(detail)
             }
         }
         Err(result) => result,
     }
-}
-
-/// What an Anthropic Messages reply actually looks like.
-#[derive(Debug, PartialEq, Eq)]
-enum AnthropicReply {
-    /// A JSON message object, which is what a native endpoint returns.
-    Message,
-    /// A server-sent event stream, with the number of `data:` events seen.
-    Stream { events: usize },
-    /// Valid JSON that is not an Anthropic message.
-    NotAnthropic,
-    /// Not JSON and not an event stream.
-    NotJson,
-}
-
-/// Recognise an Anthropic Messages reply in either of its two legitimate shapes.
-///
-/// A native endpoint answers with a JSON object. A translating gateway may answer
-/// with an SSE stream even for a request that did not ask to stream, because the
-/// translation is easier to emit incrementally. Both mean the client-facing route
-/// works, which is the only question this probe asks.
-fn anthropic_reply_shape(body: &str) -> AnthropicReply {
-    let trimmed = body.trim_start();
-
-    // An event stream, which is not JSON and must not be parsed as such.
-    if is_event_stream(trimmed) {
-        let events = trimmed
-            .lines()
-            .filter(|line| line.trim_start().starts_with("data:"))
-            .count();
-        if events == 0 {
-            // A `200` with no data at all is not a usable stream.
-            return AnthropicReply::NotJson;
-        }
-        // Confirm it is an Anthropic stream rather than any SSE: the event names or
-        // the payload types have to name the Messages protocol.
-        let looks_anthropic = trimmed.contains("message_start")
-            || trimmed.contains("content_block_start")
-            || trimmed.contains("content_block_delta")
-            || trimmed.contains("\"type\":\"message\"");
-        return if looks_anthropic {
-            AnthropicReply::Stream { events }
-        } else {
-            AnthropicReply::NotAnthropic
-        };
-    }
-
-    match serde_json::from_str::<serde_json::Value>(trimmed) {
-        Ok(value) => {
-            // An Anthropic message carries `content`, or declares `type: message`.
-            // Some gateways report the type inside an event envelope instead.
-            let looks_anthropic = value.get("content").is_some()
-                || value.get("type").and_then(|t| t.as_str()) == Some("message")
-                || value
-                    .get("message")
-                    .is_some_and(|m| m.get("content").is_some() || m.get("role").is_some());
-            if looks_anthropic {
-                AnthropicReply::Message
-            } else {
-                AnthropicReply::NotAnthropic
-            }
-        }
-        Err(_) => AnthropicReply::NotJson,
-    }
-}
-
-/// Whether a body is a server-sent event stream.
-///
-/// Checked by shape rather than by `Content-Type`, because the content type is not
-/// carried through `execute` and a gateway is not obliged to set it.
-fn is_event_stream(body: &str) -> bool {
-    body.starts_with("event:")
-        || body.starts_with("data:")
-        || body.contains("\ndata:")
-        || body.contains("\nevent:")
 }
 
 // ---------------------------------------------------------------------------
@@ -1367,7 +1263,9 @@ pub async fn probe_tool_calling(target: &ProbeTarget, codex: bool) -> ProbeResul
 
             // Only complain about the shape when nothing recognisable was found at
             // all, so a genuine protocol problem is still reported.
-            if !called && !body.trim_start().starts_with('{') && !is_event_stream(body.trim_start())
+            if !called
+                && !body.trim_start().starts_with('{')
+                && !crate::testing::response::is_event_stream(&body)
             {
                 return ProbeResult::new(ProbeOutcome::Unsupported, latency).with_detail(
                     "The endpoint answered with something this probe does not recognize.",

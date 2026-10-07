@@ -34,7 +34,9 @@
 pub mod pipeline;
 pub mod playground;
 pub mod probes;
+pub mod response;
 pub mod secret;
 
 pub use pipeline::{test_profile, TestOutcome, TestStep, TestStepState};
+pub use response::{parse_for, Framing, ParsedReply};
 pub use secret::Secret;

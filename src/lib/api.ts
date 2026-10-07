@@ -16,6 +16,15 @@ export interface CommandError {
   message: string;
   hint?: string;
   details?: string;
+  /**
+   * A stable identifier for this specific failure, when the backend supplies one.
+   *
+   * The interface translates by this rather than by matching `message`, so the copy
+   * follows the chosen language and does not break when the backend rewords a
+   * sentence. Absent for most errors, whose English is already the right thing to
+   * show.
+   */
+  code?: string;
 }
 
 export type ErrorKind =
@@ -335,8 +344,15 @@ export interface PlaygroundResult {
   text: string;
   latencyMs: number;
   model: string;
-  /** Always false: the playground sends a buffered, non-streaming request. */
+  /**
+   * Whether the reply arrived as an event stream.
+   *
+   * A gateway may stream even though this call did not ask it to, so this reports
+   * what actually came back rather than what was requested.
+   */
   streaming: boolean;
+  /** How the reply was framed: `JSON` or `SSE`. */
+  framing?: string;
   promptTokens?: number;
   completionTokens?: number;
 }
@@ -463,6 +479,8 @@ export class ApiError extends Error {
   readonly kind: ErrorKind;
   readonly hint?: string;
   readonly details?: string;
+  /** Stable identifier for this failure, when the backend supplied one. */
+  readonly code?: string;
 
   constructor(error: CommandError) {
     super(error.message);
@@ -470,6 +488,7 @@ export class ApiError extends Error {
     this.kind = error.kind;
     this.hint = error.hint;
     this.details = error.details;
+    this.code = error.code;
   }
 
   /** The full message a user should see, including the hint. */

@@ -17,10 +17,22 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { KNOWN_REASON_CODES, KNOWN_STEP_IDS, reasonText, stepLabel } from "./backend-text";
+import {
+  KNOWN_ERROR_CODES,
+  KNOWN_REASON_CODES,
+  KNOWN_STEP_IDS,
+  errorText,
+  reasonText,
+  stepLabel,
+} from "./backend-text";
 
 const PIPELINE = readFileSync(
   resolve(__dirname, "../../src-tauri/src/testing/pipeline.rs"),
+  "utf8",
+);
+
+const PLAYGROUND = readFileSync(
+  resolve(__dirname, "../../src-tauri/src/testing/playground.rs"),
   "utf8",
 );
 
@@ -158,6 +170,70 @@ describe("the identifier protocol itself", () => {
       for (const code of KNOWN_REASON_CODES) {
         expect(reasonText(code, "", language), `${code}/${language}`).not.toMatch(dashes);
       }
+      for (const code of KNOWN_ERROR_CODES) {
+        expect(errorText(code, "", language), `${code}/${language}`).not.toMatch(dashes);
+      }
+    }
+  });
+});
+
+describe("app-owned error copy", () => {
+  it("translates the unreadable-response error into both languages", () => {
+    // The reported leak: the Indonesian interface showed "Request gagal." above an
+    // English explanation from Rust. This is that explanation, translated.
+    const english = errorText("PLAYGROUND_RESPONSE_UNREADABLE", "backend text", "en");
+    const indonesian = errorText("PLAYGROUND_RESPONSE_UNREADABLE", "backend text", "id");
+
+    expect(english).toBe("The provider returned a response format that could not be read.");
+    expect(indonesian).toBe("Provider mengembalikan format respons yang tidak dapat dibaca.");
+    expect(indonesian).not.toBe(english);
+    expect(indonesian).not.toContain("could not be read");
+  });
+
+  it("translates every playground error the backend can raise", () => {
+    // Each of these is Eclyzer Bridge's own explanation of a technical condition, so
+    // each must be readable in the chosen language.
+    for (const code of KNOWN_ERROR_CODES) {
+      const english = errorText(code, "fallback", "en");
+      const indonesian = errorText(code, "fallback", "id");
+      expect(english, `${code} fell back instead of translating`).not.toBe("fallback");
+      expect(indonesian, `${code} fell back instead of translating`).not.toBe("fallback");
+      expect(indonesian, `${code} is identical in both languages`).not.toBe(english);
+    }
+  });
+
+  it("keeps an unknown code's backend message rather than showing nothing", () => {
+    // A newer backend against an older frontend must stay readable.
+    expect(errorText("SOMETHING_NEW", "Backend explanation.", "id")).toBe("Backend explanation.");
+    expect(errorText(undefined, "No code at all.", "id")).toBe("No code at all.");
+  });
+
+  it("agrees with the codes Rust actually emits", () => {
+    // The two sides share a protocol. A code renamed in Rust would otherwise degrade
+    // silently to English, which is exactly the leak this table exists to close.
+    const emitted = new Set<string>();
+    for (const match of PLAYGROUND.matchAll(/\.with_code\("([A-Z_]+)"\)/g)) {
+      if (match[1]) emitted.add(match[1]);
+    }
+    expect(emitted.size, "no error codes were parsed from playground.rs").toBeGreaterThan(3);
+
+    const untranslated = [...emitted].filter((c) => !KNOWN_ERROR_CODES.includes(c)).sort();
+    expect(
+      untranslated,
+      `emitted by the backend but untranslated, so they would show English in both ` +
+        `languages: ${untranslated.join(", ")}`,
+    ).toEqual([]);
+
+    const invented = KNOWN_ERROR_CODES.filter((c) => !emitted.has(c)).sort();
+    expect(
+      invented,
+      `translated here but never emitted by the backend: ${invented.join(", ")}`,
+    ).toEqual([]);
+  });
+
+  it("uses upper snake case, matching the backend's convention", () => {
+    for (const code of KNOWN_ERROR_CODES) {
+      expect(code, `${code} is not UPPER_SNAKE_CASE`).toMatch(/^[A-Z][A-Z0-9_]*$/);
     }
   });
 });

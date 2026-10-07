@@ -15,7 +15,14 @@ pub struct PlaygroundResult {
     pub text: String,
     pub latency_ms: u64,
     pub model: String,
+    /// Whether the reply arrived as an event stream.
+    ///
+    /// A gateway may stream even though this call did not ask it to, so this reports
+    /// what actually came back rather than what was requested.
     pub streaming: bool,
+    /// How the reply was framed: `JSON` or `SSE`. Shown in the interface so the
+    /// transport is not a hidden detail.
+    pub framing: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt_tokens: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -90,23 +97,38 @@ pub async fn send(
         return Err(describe_failure(status, &text));
     }
 
-    let parsed: serde_json::Value = serde_json::from_str(&text).map_err(|err| {
-        BridgeError::provider_error(
-            "The provider's reply was not in the format this endpoint should use.",
+    // The framing decides how to read the reply, not the `stream` flag that was
+    // sent. A gateway may stream even when the request did not ask it to - the gateway
+    // does, because it is translating - and reading that as JSON failed with "the
+    // provider's reply was not in the format this endpoint should use" for an
+    // endpoint that the compatibility test had just passed 7/7.
+    //
+    // This uses the same parser as the probes, so a reply one accepts cannot be
+    // rejected by the other.
+    let parsed = crate::testing::response::parse_for(protocol, &text);
+
+    // An explicit error event is the provider's own answer, so it is surfaced as a
+    // provider error rather than as missing content.
+    if let Some(message) = parsed.stream_error.clone() {
+        return Err(BridgeError::provider_error(
+            "The provider reported an error for this request.",
         )
+        .with_hint("This came from the provider, not from Eclyzer Bridge.")
+        .with_details(message));
+    }
+
+    // A body that is neither JSON nor an event stream is a framing problem, which is
+    // a different failure from "the provider replied with nothing".
+    if parsed.framing.is_none() {
+        return Err(BridgeError::provider_error(
+            "The provider returned a response format that could not be read.",
+        )
+        .with_code("PLAYGROUND_RESPONSE_UNREADABLE")
         .with_hint("The endpoint may not be compatible with this agent's protocol.")
-        .with_details(err.to_string())
-    })?;
+        .with_details(crate::testing::probes::safe_error_excerpt(&text)));
+    }
 
-    let (reply, prompt_tokens, completion_tokens) = match protocol {
-        crate::profiles::ApiProtocol::AnthropicMessages => extract_anthropic(&parsed),
-        // A Responses reply carries `output` items rather than `choices`, and
-        // reports usage as `input_tokens`/`output_tokens`.
-        crate::profiles::ApiProtocol::OpenAiResponses => extract_responses(&parsed),
-        crate::profiles::ApiProtocol::OpenAiChatCompletions => extract_openai(&parsed),
-    };
-
-    if reply.trim().is_empty() {
+    if parsed.text.trim().is_empty() {
         return Err(
             BridgeError::provider_error("The provider returned an empty reply.")
                 .with_hint("Try a different model, or check the provider's status page."),
@@ -114,145 +136,50 @@ pub async fn send(
     }
 
     Ok(PlaygroundResult {
-        text: truncate_chars(&reply, MAX_REPLY_CHARS),
+        text: truncate_chars(&parsed.text, MAX_REPLY_CHARS),
         latency_ms,
         model,
-        // A non-streaming playground call: saying otherwise would be a lie.
-        streaming: false,
-        prompt_tokens,
-        completion_tokens,
+        // Reported honestly: a gateway that streams has streamed, even though this
+        // call did not ask for it. Saying otherwise would misdescribe the transport.
+        streaming: parsed.framing == Some(crate::testing::response::Framing::EventStream),
+        framing: parsed
+            .framing
+            .map(|f| f.label().to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
+        prompt_tokens: parsed.input_tokens,
+        completion_tokens: parsed.output_tokens,
     })
 }
 
 /// Map a non-success response onto an actionable error.
 fn describe_failure(status: reqwest::StatusCode, body: &str) -> BridgeError {
     let detail = crate::testing::probes::safe_error_excerpt(body);
+    // Each arm carries a stable code so the interface can present this in whichever
+    // language the user chose. The English message stays as the fallback for logs.
     match status.as_u16() {
         401 | 403 => BridgeError::auth("The provider rejected your API key.")
+            .with_code("PLAYGROUND_KEY_REJECTED")
             .with_hint("Check that the key is correct and still active, then save it again."),
         404 => {
             BridgeError::provider_error("The provider does not recognize that endpoint or model.")
+                .with_code("PLAYGROUND_ENDPOINT_OR_MODEL_UNKNOWN")
                 .with_hint("Check the base URL and the model ID.")
                 .with_details(detail)
         }
         429 => BridgeError::rate_limited("The provider is rate limiting this key.")
+            .with_code("PLAYGROUND_RATE_LIMITED")
             .with_hint("Wait a moment, then try again.")
             .with_details(detail),
         s if (500..600).contains(&s) => {
             BridgeError::provider_error("The provider reported a server error.")
+                .with_code("PLAYGROUND_SERVER_ERROR")
                 .with_hint("This is on the provider's side. Try again shortly.")
                 .with_details(detail)
         }
-        _ => BridgeError::provider_error("The provider rejected the request.").with_details(detail),
+        _ => BridgeError::provider_error("The provider rejected the request.")
+            .with_code("PLAYGROUND_REQUEST_REJECTED")
+            .with_details(detail),
     }
-}
-
-/// Pull the assistant text and token counts out of an Anthropic-shaped reply.
-fn extract_anthropic(value: &serde_json::Value) -> (String, Option<u32>, Option<u32>) {
-    let text = value
-        .get("content")
-        .and_then(|content| content.as_array())
-        .map(|blocks| {
-            blocks
-                .iter()
-                .filter_map(|block| block.get("text").and_then(|t| t.as_str()))
-                .collect::<Vec<_>>()
-                .join("")
-        })
-        .unwrap_or_default();
-
-    let usage = value.get("usage");
-    (
-        text,
-        usage
-            .and_then(|u| u.get("input_tokens"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32),
-        usage
-            .and_then(|u| u.get("output_tokens"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32),
-    )
-}
-
-/// Pull the assistant text and token counts out of an OpenAI Responses reply.
-///
-/// The Responses shape differs from Chat Completions in both places that matter: the
-/// text is inside `output` items, each with its own `content` array whose parts carry
-/// the type `output_text`, and usage is reported as `input_tokens`/`output_tokens`
-/// rather than `prompt_tokens`/`completion_tokens`. Reading it with the Chat parser
-/// would return an empty reply for a perfectly good response.
-fn extract_responses(value: &serde_json::Value) -> (String, Option<u32>, Option<u32>) {
-    // A provider may put the text in `output_text` at the top level, which is a
-    // convenience field some gateways add, or in the nested item structure.
-    let convenience = value
-        .get("output_text")
-        .and_then(|t| t.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let text = if !convenience.trim().is_empty() {
-        convenience
-    } else {
-        value
-            .get("output")
-            .and_then(|output| output.as_array())
-            .map(|items| {
-                items
-                    .iter()
-                    // A function call item has no text, so it contributes nothing
-                    // rather than a stray placeholder.
-                    .flat_map(|item| {
-                        item.get("content")
-                            .and_then(|c| c.as_array())
-                            .map(|parts| parts.as_slice())
-                            .unwrap_or(&[])
-                    })
-                    .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
-                    .collect::<Vec<_>>()
-                    .join("")
-            })
-            .unwrap_or_default()
-    };
-
-    let usage = value.get("usage");
-    (
-        text,
-        usage
-            .and_then(|u| u.get("input_tokens"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32),
-        usage
-            .and_then(|u| u.get("output_tokens"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32),
-    )
-}
-
-/// Pull the assistant text and token counts out of an OpenAI-shaped reply.
-fn extract_openai(value: &serde_json::Value) -> (String, Option<u32>, Option<u32>) {
-    let text = value
-        .get("choices")
-        .and_then(|choices| choices.as_array())
-        .and_then(|choices| choices.first())
-        .and_then(|choice| choice.get("message"))
-        .and_then(|message| message.get("content"))
-        .and_then(|content| content.as_str())
-        .unwrap_or_default()
-        .to_string();
-
-    let usage = value.get("usage");
-    (
-        text,
-        usage
-            .and_then(|u| u.get("prompt_tokens"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32),
-        usage
-            .and_then(|u| u.get("completion_tokens"))
-            .and_then(|v| v.as_u64())
-            .map(|v| v as u32),
-    )
 }
 
 /// Truncate on a character boundary, never mid-codepoint.
@@ -268,41 +195,45 @@ fn truncate_chars(text: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::response;
 
     #[test]
     fn anthropic_replies_are_parsed() {
-        let value = serde_json::json!({
+        let body = serde_json::json!({
             "content": [{ "type": "text", "text": "ready" }],
             "usage": { "input_tokens": 7, "output_tokens": 2 }
-        });
-        let (text, input, output) = extract_anthropic(&value);
-        assert_eq!(text, "ready");
-        assert_eq!(input, Some(7));
-        assert_eq!(output, Some(2));
+        })
+        .to_string();
+        let parsed = response::parse_anthropic(&body);
+        assert_eq!(parsed.text, "ready");
+        assert_eq!(parsed.input_tokens, Some(7));
+        assert_eq!(parsed.output_tokens, Some(2));
+        assert_eq!(parsed.framing, Some(response::Framing::Json));
     }
 
     #[test]
     fn anthropic_replies_join_multiple_blocks() {
-        let value = serde_json::json!({
+        let body = serde_json::json!({
             "content": [
                 { "type": "text", "text": "one " },
                 { "type": "text", "text": "two" }
             ]
-        });
-        let (text, _, _) = extract_anthropic(&value);
-        assert_eq!(text, "one two");
+        })
+        .to_string();
+        assert_eq!(response::parse_anthropic(&body).text, "one two");
     }
 
     #[test]
     fn openai_replies_are_parsed() {
-        let value = serde_json::json!({
+        let body = serde_json::json!({
             "choices": [{ "message": { "role": "assistant", "content": "ready" } }],
             "usage": { "prompt_tokens": 5, "completion_tokens": 1 }
-        });
-        let (text, input, output) = extract_openai(&value);
-        assert_eq!(text, "ready");
-        assert_eq!(input, Some(5));
-        assert_eq!(output, Some(1));
+        })
+        .to_string();
+        let parsed = response::parse_chat(&body);
+        assert_eq!(parsed.text, "ready");
+        assert_eq!(parsed.input_tokens, Some(5));
+        assert_eq!(parsed.output_tokens, Some(1));
     }
 
     #[test]
@@ -310,7 +241,7 @@ mod tests {
         // The shape Codex actually receives. Reading it with the Chat parser
         // returned an empty string, which the caller reports as "the provider
         // returned an empty reply" for a perfectly good response.
-        let value = serde_json::json!({
+        let body = serde_json::json!({
             "id": "resp_1",
             "object": "response",
             "status": "completed",
@@ -320,55 +251,59 @@ mod tests {
                 "content": [{ "type": "output_text", "text": "ready" }]
             }],
             "usage": { "input_tokens": 9, "output_tokens": 3 }
-        });
-        let (text, input, output) = extract_responses(&value);
-        assert_eq!(text, "ready");
-        assert_eq!(input, Some(9));
-        assert_eq!(output, Some(3));
+        })
+        .to_string();
+        let parsed = response::parse_responses(&body);
+        assert_eq!(parsed.text, "ready");
+        assert_eq!(parsed.input_tokens, Some(9));
+        assert_eq!(parsed.output_tokens, Some(3));
     }
 
     #[test]
     fn responses_replies_join_multiple_output_parts() {
-        let value = serde_json::json!({
+        let body = serde_json::json!({
             "output": [
                 { "content": [{ "type": "output_text", "text": "one " }] },
                 { "content": [{ "type": "output_text", "text": "two" }] }
             ]
-        });
-        assert_eq!(extract_responses(&value).0, "one two");
+        })
+        .to_string();
+        assert_eq!(response::parse_responses(&body).text, "one two");
     }
 
     #[test]
     fn a_responses_reply_with_only_a_function_call_yields_no_text_not_garbage() {
         // A tool call carries no assistant text. It must produce an empty string so
         // the caller reports "empty reply" rather than inventing content.
-        let value = serde_json::json!({
+        let body = serde_json::json!({
             "output": [{
                 "type": "function_call",
                 "name": "get_weather",
                 "arguments": "{\"city\":\"Jakarta\"}"
             }]
-        });
-        assert_eq!(extract_responses(&value).0, "");
+        })
+        .to_string();
+        assert_eq!(response::parse_responses(&body).text, "");
     }
 
     #[test]
     fn a_top_level_output_text_field_is_preferred_when_present() {
         // Some gateways add this convenience field. Using it avoids descending into
         // the item structure for the common case.
-        let value = serde_json::json!({
+        let body = serde_json::json!({
             "output_text": "ready",
             "output": [{ "content": [{ "type": "output_text", "text": "ignored" }] }]
-        });
-        assert_eq!(extract_responses(&value).0, "ready");
+        })
+        .to_string();
+        assert_eq!(response::parse_responses(&body).text, "ready");
     }
 
     #[test]
     fn a_missing_shape_yields_empty_text_not_a_panic() {
-        let value = serde_json::json!({ "unexpected": true });
-        assert_eq!(extract_anthropic(&value).0, "");
-        assert_eq!(extract_openai(&value).0, "");
-        assert_eq!(extract_responses(&value).0, "");
+        let body = serde_json::json!({ "unexpected": true }).to_string();
+        assert_eq!(response::parse_anthropic(&body).text, "");
+        assert_eq!(response::parse_chat(&body).text, "");
+        assert_eq!(response::parse_responses(&body).text, "");
     }
 
     #[test]

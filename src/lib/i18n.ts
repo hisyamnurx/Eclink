@@ -374,6 +374,8 @@ const en = {
   "playground.requestFailed": "The request failed.",
   "playground.responseReceived": "Response received",
   "playground.streamed": "Streamed",
+  "playground.transport": "Transport",
+  "playground.technicalDetail": "Technical detail",
   "playground.tokensInline": "{input} in / {output} out tokens",
 
   // ---- settings --------------------------------------------------------
@@ -831,6 +833,8 @@ const id: Dictionary = {
   "playground.requestFailed": "Request gagal.",
   "playground.responseReceived": "Balasan diterima",
   "playground.streamed": "Streaming",
+  "playground.transport": "Transport",
+  "playground.technicalDetail": "Detail teknis",
   "playground.tokensInline": "{input} masuk / {output} keluar token",
 
   "settings.title": "Pengaturan",

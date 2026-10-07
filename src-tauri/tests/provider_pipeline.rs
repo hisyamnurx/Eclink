@@ -47,6 +47,16 @@ impl Response {
             content_type: "text/event-stream",
         }
     }
+
+    /// An arbitrary body and content type, for the cases that are neither JSON nor
+    /// a stream.
+    fn raw(status: u16, body: &str, content_type: &'static str) -> Self {
+        Self {
+            status,
+            body: body.to_string(),
+            content_type,
+        }
+    }
 }
 
 /// A single recorded request, for asserting what the client actually sent.
@@ -1796,4 +1806,284 @@ async fn the_anthropic_route_resolves_exactly_for_a_local_gateway() {
             "base {base}"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// The Playground, against the same gateway shapes.
+//
+// The reported regression: the same profile passed 7/7 checks and then failed in
+// the Playground with "the provider's reply was not in the format this endpoint
+// should use". The Playground ran `serde_json::from_str` unconditionally while the
+// probe had already been taught to accept an event stream, so the two disagreed
+// about what a valid reply was.
+//
+// Both now use `testing::response`, and the last test here is the invariant that
+// keeps them together: one gateway must satisfy the compatibility pipeline AND the
+// Playground.
+// ---------------------------------------------------------------------------
+
+/// A multi-delta Anthropic stream, like a real answer arriving in pieces.
+const SSE_ANTHROPIC_MULTI_DELTA: &str = concat!(
+    "event: message_start\n",
+    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"m\",\"content\":[],\"usage\":{\"input_tokens\":11,\"output_tokens\":0}}}\n\n",
+    "event: content_block_start\n",
+    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+    "event: ping\n",
+    "data: {\"type\":\"ping\"}\n\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Halo\"}}\n\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"! Ada\"}}\n\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" yang bisa\"}}\n\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\" saya bantu?\"}}\n\n",
+    "event: content_block_stop\n",
+    "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+    "event: message_delta\n",
+    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":9}}\n\n",
+    "event: message_stop\n",
+    "data: {\"type\":\"message_stop\"}\n\n",
+);
+
+/// A stream carrying a tool call rather than prose.
+const SSE_ANTHROPIC_TOOL_USE: &str = concat!(
+    "event: message_start\n",
+    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":4,\"output_tokens\":1}}}\n\n",
+    "event: content_block_start\n",
+    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"get_weather\",\"input\":{}}}\n\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\\\"Jakarta\\\"}\"}}\n\n",
+    "event: content_block_stop\n",
+    "data: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+    "event: message_stop\n",
+    "data: {\"type\":\"message_stop\"}\n\n",
+);
+
+/// A stream where the provider reports a real error.
+const SSE_ANTHROPIC_ERROR: &str = concat!(
+    "event: message_start\n",
+    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\n",
+    "event: error\n",
+    "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Upstream is overloaded\"}}\n\n",
+);
+
+use eclyzer_bridge_lib::profiles::ApiProtocol;
+use eclyzer_bridge_lib::testing::playground::send;
+
+fn playground_target(server: &MockServer, model: &str) -> ProbeTarget {
+    ProbeTarget::new(
+        &format!("{}/v1", server.base_url),
+        model,
+        Secret::new("sk-test"),
+        AuthMode::XApiKey,
+        Some(15_000),
+    )
+    .expect("target")
+}
+
+#[tokio::test]
+async fn the_playground_reads_a_json_anthropic_reply() {
+    let server = MockServer::start(vec![(
+        "/v1/messages".into(),
+        Response::json(200, OK_MESSAGES),
+    )]);
+    let result = send(
+        &playground_target(&server, "test-model"),
+        "halo",
+        ApiProtocol::AnthropicMessages,
+    )
+    .await
+    .expect("a JSON reply must succeed");
+    assert_eq!(result.text, "ready");
+    assert_eq!(result.framing, "JSON");
+    assert!(!result.streaming);
+}
+
+#[tokio::test]
+async fn the_playground_reads_an_anthropic_stream_even_though_it_did_not_ask_to_stream() {
+    // The exact reported failure. The request carries no `stream` field, and the gateway
+    // answers with an event stream anyway. Reading that as JSON produced "the
+    // provider's reply was not in the format this endpoint should use".
+    let server = MockServer::start(vec![(
+        "/v1/messages".into(),
+        Response::sse(SSE_ANTHROPIC_MULTI_DELTA),
+    )]);
+    let result = send(
+        &playground_target(&server, "combo_a"),
+        "halo",
+        ApiProtocol::AnthropicMessages,
+    )
+    .await
+    .expect("a streamed reply must succeed");
+    assert_eq!(
+        result.text, "Halo! Ada yang bisa saya bantu?",
+        "the deltas must be joined in order"
+    );
+    assert_eq!(result.framing, "SSE");
+    assert!(result.streaming, "a stream is reported as a stream");
+}
+
+#[tokio::test]
+async fn the_playground_ignores_metadata_events_in_a_stream() {
+    // `message_start`, `content_block_start`, `content_block_stop`, `message_delta`,
+    // `message_stop`, and `ping` carry no visible text. Treating them as malformed is
+    // what made a working reply look broken.
+    let server = MockServer::start(vec![(
+        "/v1/messages".into(),
+        Response::sse(SSE_ANTHROPIC_MULTI_DELTA),
+    )]);
+    let result = send(
+        &playground_target(&server, "m"),
+        "halo",
+        ApiProtocol::AnthropicMessages,
+    )
+    .await
+    .expect("metadata events must not fail the parse");
+    assert!(
+        !result.text.contains("event:") && !result.text.contains("data:"),
+        "raw SSE framing must never be shown as the reply: {}",
+        result.text
+    );
+    // Token counts come from the stream's own usage fields.
+    assert_eq!(result.prompt_tokens, Some(11));
+    assert_eq!(result.completion_tokens, Some(9));
+}
+
+#[tokio::test]
+async fn the_playground_reports_a_tool_only_stream_as_an_empty_reply_not_malformed() {
+    // A tool call carries no assistant prose. That is an empty reply, which is a
+    // different and more accurate message than "unreadable format".
+    let server = MockServer::start(vec![(
+        "/v1/messages".into(),
+        Response::sse(SSE_ANTHROPIC_TOOL_USE),
+    )]);
+    let error = send(
+        &playground_target(&server, "m"),
+        "weather?",
+        ApiProtocol::AnthropicMessages,
+    )
+    .await
+    .expect_err("a tool-only reply has no text to show");
+    assert!(
+        error.message.contains("empty"),
+        "expected an empty-reply message, got: {}",
+        error.message
+    );
+    assert_ne!(
+        error.code.as_deref(),
+        Some("PLAYGROUND_RESPONSE_UNREADABLE"),
+        "a tool-only stream is not an unreadable format"
+    );
+}
+
+#[tokio::test]
+async fn the_playground_surfaces_an_explicit_stream_error() {
+    // An error event is the provider's own answer, so it must reach the user as a
+    // provider error rather than as missing content.
+    let server = MockServer::start(vec![(
+        "/v1/messages".into(),
+        Response::sse(SSE_ANTHROPIC_ERROR),
+    )]);
+    let error = send(
+        &playground_target(&server, "m"),
+        "halo",
+        ApiProtocol::AnthropicMessages,
+    )
+    .await
+    .expect_err("an error event is a failure");
+    let detail = error.details.unwrap_or_default();
+    assert!(
+        detail.contains("overloaded"),
+        "the provider's own message must survive: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn the_playground_reports_a_body_that_is_neither_json_nor_a_stream() {
+    // A genuine parsing failure still has to be reported, with a stable code the
+    // interface can translate.
+    let server = MockServer::start(vec![(
+        "/v1/messages".into(),
+        Response::raw(200, "this is not a reply at all", "text/plain"),
+    )]);
+    let error = send(
+        &playground_target(&server, "m"),
+        "halo",
+        ApiProtocol::AnthropicMessages,
+    )
+    .await
+    .expect_err("an unreadable body is an error");
+    assert_eq!(
+        error.code.as_deref(),
+        Some("PLAYGROUND_RESPONSE_UNREADABLE"),
+        "the error must carry a code the frontend can translate"
+    );
+}
+
+#[tokio::test]
+async fn the_playground_reads_a_responses_stream_for_codex() {
+    // The same fix for the other agent, so neither parser can drift.
+    let server = MockServer::start(vec![(
+        "/v1/responses".into(),
+        Response::sse(SSE_RESPONSES_MINIMAL),
+    )]);
+    // This fixture has no text, so an empty-reply error is the correct outcome; the
+    // point is that the framing is recognised rather than reported as unreadable.
+    let error = send(
+        &playground_target(&server, "m"),
+        "halo",
+        ApiProtocol::OpenAiResponses,
+    )
+    .await
+    .expect_err("no text in this fixture");
+    assert_ne!(
+        error.code.as_deref(),
+        Some("PLAYGROUND_RESPONSE_UNREADABLE"),
+        "a Responses stream must be readable, not malformed"
+    );
+}
+
+#[tokio::test]
+async fn one_gateway_satisfies_both_the_compatibility_test_and_the_playground() {
+    // The invariant the report asked for. A reply the compatibility pipeline accepts
+    // must not be rejected by the Playground, because a user who is told a provider
+    // works and then cannot use it has been misled.
+    let server = MockServer::start(vec![
+        (
+            "/v1/messages".into(),
+            Response::sse(SSE_ANTHROPIC_MULTI_DELTA),
+        ),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+    let base = format!("{}/v1", server.base_url);
+
+    let profile = profile_for(&base, "combo_a", AgentId::Claude);
+    let outcome = test_profile(&profile, AgentId::Claude, Secret::new("sk-test"))
+        .await
+        .expect("the pipeline runs");
+
+    let protocol_state = outcome
+        .steps
+        .iter()
+        .find(|s| s.id == "protocol")
+        .map(|s| format!("{:?}", s.state))
+        .unwrap_or_default();
+    assert_eq!(
+        protocol_state,
+        "Passed",
+        "the compatibility test must accept this gateway; steps were {:?}",
+        step_states(&outcome)
+    );
+
+    let result = send(
+        &playground_target(&server, "combo_a"),
+        "halo",
+        ApiProtocol::AnthropicMessages,
+    )
+    .await
+    .expect("the Playground must accept the same gateway the test accepted");
+
+    assert_eq!(result.text, "Halo! Ada yang bisa saya bantu?");
+    assert_eq!(result.framing, "SSE");
 }

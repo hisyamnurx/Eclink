@@ -81,6 +81,19 @@ pub struct BridgeError {
     pub hint: Option<String>,
     /// Optional technical detail, already secret-redacted.
     pub details: Option<String>,
+    /// A stable identifier for this specific failure, when one is known.
+    ///
+    /// The frontend translates by this rather than by matching the English
+    /// `message`, which breaks the moment the wording changes. It is optional
+    /// because most errors are already actionable in the interface's own words and
+    /// do not need their own translation; the ones that do are the app's own
+    /// explanations of a technical condition, such as a reply that could not be
+    /// read.
+    ///
+    /// Deliberately absent from the default so existing construction sites keep
+    /// working; a caller that wants translatable copy sets it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 impl BridgeError {
@@ -90,7 +103,18 @@ impl BridgeError {
             message: message.into(),
             hint: None,
             details: None,
+            code: None,
         }
+    }
+
+    /// Attach a stable code the frontend can translate.
+    ///
+    /// Use upper snake case, e.g. `PLAYGROUND_RESPONSE_UNREADABLE`. The `message`
+    /// stays as a readable English fallback for logs and for any client that does not
+    /// know the code.
+    pub fn with_code(mut self, code: impl Into<String>) -> Self {
+        self.code = Some(code.into());
+        self
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
@@ -206,6 +230,7 @@ impl From<std::io::Error> for BridgeError {
             message: message.to_string(),
             hint: hint.map(str::to_string),
             details: Some(crate::diagnostics::redact::redact_text(&err.to_string())),
+            code: None,
         }
     }
 }
@@ -217,6 +242,7 @@ impl From<serde_json::Error> for BridgeError {
             message: "Configuration issue detected.".to_string(),
             hint: Some("Eclyzer Bridge won't modify this file until it can be read safely.".into()),
             details: Some(crate::diagnostics::redact::redact_text(&err.to_string())),
+            code: None,
         }
     }
 }

@@ -155,3 +155,72 @@ export function reasonText(
 /** The identifiers this build knows, exported so a test can check them. */
 export const KNOWN_STEP_IDS = Object.keys(STEP_LABELS);
 export const KNOWN_REASON_CODES = Object.keys(REASON_TEXTS);
+
+/**
+ * App-owned error copy, keyed by the stable `code` the backend sends.
+ *
+ * This exists because an error message from Rust is English, and rendering it
+ * directly inside a translated interface produced a screen that was half Indonesian
+ * and half English: "Request gagal. The provider's reply was not in the format this
+ * endpoint should use."
+ *
+ * Only errors whose text is Eclyzer Bridge's *own* explanation belong here. A
+ * provider's or server's raw words are never in this table, because translating
+ * them would mean inventing meaning: they are shown as-is under the technical
+ * details, which the interface labels as such.
+ */
+const ERROR_TEXTS: Record<string, BackendText> = {
+  PLAYGROUND_RESPONSE_UNREADABLE: {
+    en: "The provider returned a response format that could not be read.",
+    id: "Provider mengembalikan format respons yang tidak dapat dibaca.",
+  },
+  PLAYGROUND_KEY_REJECTED: {
+    en: "The provider rejected your API key.",
+    id: "Provider menolak API key kamu.",
+  },
+  PLAYGROUND_ENDPOINT_OR_MODEL_UNKNOWN: {
+    en: "The provider does not recognize that endpoint or model.",
+    id: "Provider tidak mengenali endpoint atau model tersebut.",
+  },
+  PLAYGROUND_RATE_LIMITED: {
+    en: "The provider is rate limiting this key.",
+    id: "Provider sedang membatasi permintaan untuk key ini.",
+  },
+  PLAYGROUND_SERVER_ERROR: {
+    en: "The provider reported a server error.",
+    id: "Provider melaporkan error di sisi server.",
+  },
+  PLAYGROUND_REQUEST_REJECTED: {
+    en: "The provider rejected the request.",
+    id: "Provider menolak request ini.",
+  },
+};
+
+/**
+ * Translate an app-owned error, keeping the backend's wording as the fallback.
+ *
+ * `message` is what Rust sent. It is used unchanged when the code is unknown, which
+ * keeps a newer backend readable against an older frontend rather than showing a
+ * blank or a raw identifier.
+ */
+export function errorText(
+  code: string | undefined,
+  backendMessage: string,
+  language: Language,
+): string {
+  if (!code) return backendMessage;
+  return lookup(ERROR_TEXTS, code, language) ?? backendMessage;
+}
+
+/**
+ * Whether this error's text is the application's own, and therefore translatable.
+ *
+ * Lets a caller decide between showing translated copy and showing the provider's
+ * own words, instead of guessing from the message.
+ */
+export function isAppOwnedError(code: string | undefined): boolean {
+  return Boolean(code && ERROR_TEXTS[code]);
+}
+
+/** The error codes this build can translate, exported for a test to check. */
+export const KNOWN_ERROR_CODES = Object.keys(ERROR_TEXTS);

@@ -12,6 +12,7 @@ import { useState } from "react";
 import { Badge, Banner, Button, EmptyState, Field, LoadingState, Meta } from "../components/ui";
 import { call, type AgentId, type PlaygroundResult, type ProfileSummary } from "../lib/api";
 import { latency } from "../lib/format";
+import { errorText } from "../lib/backend-text";
 import { useApp } from "../state/AppContext";
 
 export function Playground({ initialAgent }: { initialAgent?: AgentId }) {
@@ -74,12 +75,14 @@ function PlaygroundForm({
   /** The tab the user chose. Sent with the request so the right API is used. */
   agent: AgentId;
 }) {
-  const { t } = useApp();
+  const { t, language } = useApp();
   // The caller guarantees a non-empty list, so the first profile is present.
   const [profileId, setProfileId] = useState(profiles[0]!.id);
   const [prompt, setPrompt] = useState("");
   const [result, setResult] = useState<PlaygroundResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** The provider's own untranslated words, shown separately. */
+  const [detail, setDetail] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const selected = profiles.find((profile) => profile.id === profileId);
@@ -87,6 +90,7 @@ function PlaygroundForm({
   const send = async () => {
     setBusy(true);
     setError(null);
+    setDetail(null);
     setResult(null);
     try {
       const response = await call("playground_send", {
@@ -100,8 +104,16 @@ function PlaygroundForm({
       });
       setResult(response);
     } catch (raw) {
-      const api = raw as { message?: string; hint?: string };
-      setError([api.message ?? t("playground.requestFailed"), api.hint].filter(Boolean).join(" "));
+      const api = raw as { message?: string; hint?: string; code?: string; details?: string };
+      // The headline is translated by the backend's stable code, so an app-owned
+      // explanation follows the chosen language. When the code is one this build
+      // does not know, the backend's English is used rather than showing nothing.
+      const headline = errorText(api.code, api.message ?? t("playground.requestFailed"), language);
+      setError([headline, api.hint].filter(Boolean).join(" "));
+      // The provider's own words are never translated, because doing so would mean
+      // inventing meaning. They are shown verbatim under a labelled technical
+      // section instead of being mixed into the headline.
+      setDetail(api.details ?? null);
     } finally {
       setBusy(false);
     }
@@ -167,6 +179,14 @@ function PlaygroundForm({
       {error && (
         <Banner tone="bad" title={t("playground.requestFailed")}>
           {error}
+          {/* The provider's own words, kept verbatim and labelled as technical.
+              Translating them would mean inventing meaning, and hiding them would
+              remove the detail a bug report needs. */}
+          {detail && (
+            <div className="small dim mono" style={{ marginTop: 6, wordBreak: "break-word" }}>
+              {t("playground.technicalDetail")}: {detail}
+            </div>
+          )}
         </Banner>
       )}
 
@@ -178,10 +198,14 @@ function PlaygroundForm({
             </Badge>
             <span className="small dim mono">{latency(result.latencyMs)}</span>
             <span className="small dim mono">{result.model}</span>
-            {/* The playground sends a buffered request, so the backend always
-                reports `streaming: false`. Badging that as "Streamed" would be a
-                lie about what the user's key paid for, so the label is only
-                rendered when the value is actually true. */}
+            {/* How the reply actually arrived. A gateway may stream even though this
+                request did not ask it to, so reporting the real transport is more
+                useful than reporting what was requested. */}
+            {result.framing && (
+              <Badge tone={result.framing === "SSE" ? "info" : "neutral"}>
+                {t("playground.transport")}: {result.framing}
+              </Badge>
+            )}
             {result.streaming && <Badge tone="info">{t("playground.streamed")}</Badge>}
             {result.promptTokens !== undefined && (
               <span className="small dim">
