@@ -1,5 +1,5 @@
 /**
- * History and recovery (PRD §26–§30).
+ * History and recovery (PRD §26-§30).
  *
  * Every action here is reversible, and the UI says so before the user commits:
  * restoring a snapshot snapshots the current state first, so a wrong choice can
@@ -28,10 +28,11 @@ import {
 } from "../lib/api";
 import { absoluteTime, bytes, relativeTime } from "../lib/format";
 import { useAsyncData } from "../lib/hooks";
+import type { MessageKey } from "../lib/i18n";
 import { useAction, useApp } from "../state/AppContext";
 
 export function History({ initialAgent }: { initialAgent?: AgentId }) {
-  const { agents } = useApp();
+  const { agents, t } = useApp();
   const installed = agents.filter((agent) => agent.installed);
   const [tab, setTab] = useState<"changes" | "snapshots" | "recovery">("changes");
 
@@ -46,10 +47,8 @@ export function History({ initialAgent }: { initialAgent?: AgentId }) {
   if (installed.length === 0) {
     return (
       <div className="main__inner">
-        <h1>History</h1>
-        <EmptyState title="No coding agent detected">
-          History appears here once Eclyzer Bridge can see Codex or Claude Code.
-        </EmptyState>
+        <h1>{t("history.title")}</h1>
+        <EmptyState title={t("error.noAgents")}>{t("history.noAgentsBody")}</EmptyState>
       </div>
     );
   }
@@ -58,15 +57,12 @@ export function History({ initialAgent }: { initialAgent?: AgentId }) {
     <div className="main__inner">
       <header className="page-header">
         <div className="page-header__text">
-          <h1>History</h1>
-          <p className="page-header__subtitle">
-            Every change Eclyzer Bridge has made, and every state it can put back. Restoring always
-            snapshots what it is about to replace.
-          </p>
+          <h1>{t("history.title")}</h1>
+          <p className="page-header__subtitle">{t("history.subtitle")}</p>
         </div>
       </header>
 
-      <div className="tabs" role="tablist" aria-label="Coding agent">
+      <div className="tabs" role="tablist" aria-label={t("playground.agentTabsAria")}>
         {installed.map((item) => (
           <button
             key={item.agent}
@@ -83,13 +79,13 @@ export function History({ initialAgent }: { initialAgent?: AgentId }) {
 
       <Tabs
         tabs={[
-          { id: "changes", label: "Changes" },
-          { id: "snapshots", label: "Snapshots" },
-          { id: "recovery", label: "Restore" },
+          { id: "changes", label: t("history.tabChanges") },
+          { id: "snapshots", label: t("history.tabSnapshots") },
+          { id: "recovery", label: t("history.tabRecovery") },
         ]}
         value={tab}
         onChange={setTab}
-        label="History view"
+        label={t("history.viewLabel")}
       />
 
       {tab === "changes" && <ChangeLog agent={agent} />}
@@ -100,6 +96,7 @@ export function History({ initialAgent }: { initialAgent?: AgentId }) {
 }
 
 function ChangeLog({ agent }: { agent: AgentId }) {
+  const { t } = useApp();
   const {
     data: entries,
     error,
@@ -108,27 +105,22 @@ function ChangeLog({ agent }: { agent: AgentId }) {
   } = useAsyncData(() => call("list_history", { agent, limit: 100 }), [agent]);
 
   if (error) return <ErrorState error={error} onRetry={reload} />;
-  if (loading && !entries) return <LoadingState label="Loading change history…" />;
+  if (loading && !entries) return <LoadingState label={t("history.loadingChanges")} />;
 
   if (!entries || entries.length === 0) {
-    return (
-      <EmptyState title="No changes recorded yet">
-        Eclyzer Bridge has not modified this agent's configuration. Activating a provider will be
-        recorded here.
-      </EmptyState>
-    );
+    return <EmptyState title={t("history.empty")}>{t("history.emptyBody")}</EmptyState>;
   }
 
   return (
     <div className="card card--flush">
       <table className="table">
-        <caption className="visually-hidden">Changes Eclyzer Bridge has made to this agent</caption>
+        <caption className="visually-hidden">{t("history.tableCaption")}</caption>
         <thead>
           <tr>
-            <th scope="col">When</th>
-            <th scope="col">Change</th>
-            <th scope="col">Result</th>
-            <th scope="col">Undoable</th>
+            <th scope="col">{t("history.when")}</th>
+            <th scope="col">{t("history.what")}</th>
+            <th scope="col">{t("history.result")}</th>
+            <th scope="col">{t("history.undoable")}</th>
           </tr>
         </thead>
         <tbody>
@@ -144,18 +136,24 @@ function ChangeLog({ agent }: { agent: AgentId }) {
               <td>
                 {entry.success ? (
                   <Badge tone="ok" dot>
-                    Succeeded
+                    {t("history.succeeded")}
                   </Badge>
                 ) : (
                   <>
                     <Badge tone="bad" dot>
-                      Failed
+                      {t("history.failed")}
                     </Badge>
                     {entry.error && <div className="small dim">{entry.error}</div>}
                   </>
                 )}
               </td>
-              <td>{entry.success && entry.snapshotId ? "Yes" : <span className="dim">—</span>}</td>
+              <td>
+                {entry.success && entry.snapshotId ? (
+                  t("history.yes")
+                ) : (
+                  <span className="dim">-</span>
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -165,6 +163,7 @@ function ChangeLog({ agent }: { agent: AgentId }) {
 }
 
 function SnapshotList({ agent }: { agent: AgentId }) {
+  const { t } = useApp();
   const [confirm, setConfirm] = useState<SnapshotView | null>(null);
   const {
     data: snapshots,
@@ -174,22 +173,16 @@ function SnapshotList({ agent }: { agent: AgentId }) {
   } = useAsyncData(() => call("list_snapshots", { agent }), [agent]);
 
   if (error) return <ErrorState error={error} onRetry={reload} />;
-  if (loading && !snapshots) return <LoadingState label="Loading snapshots…" />;
+  if (loading && !snapshots) return <LoadingState label={t("history.loadingSnapshots")} />;
 
   if (!snapshots || snapshots.length === 0) {
-    return (
-      <EmptyState title="No snapshots yet">
-        A snapshot is saved before every change, so there is always something to return to. None
-        have been taken for this agent.
-      </EmptyState>
-    );
+    return <EmptyState title={t("history.noSnapshots")}>{t("history.noSnapshotsBody")}</EmptyState>;
   }
 
   return (
     <>
-      <Banner tone="info" title="The newest 20 snapshots are kept">
-        Older ones are removed automatically. Your original configuration is kept separately and is
-        never deleted.
+      <Banner tone="info" title={t("history.newestKept")}>
+        {t("history.newestKeptBody")}
       </Banner>
 
       <div className="list">
@@ -205,7 +198,7 @@ function SnapshotList({ agent }: { agent: AgentId }) {
             </div>
             <div className="list-row__actions">
               <Button size="sm" onClick={() => setConfirm(snapshot)}>
-                Restore
+                {t("history.restore")}
               </Button>
             </div>
           </div>
@@ -215,8 +208,11 @@ function SnapshotList({ agent }: { agent: AgentId }) {
       {confirm && (
         <RestoreConfirmDialog
           agent={agent}
-          title={`Restore the snapshot from ${absoluteTime(confirm.createdAt)}?`}
-          description={`This replaces your current ${agent === "codex" ? "Codex" : "Claude Code"} configuration with the state saved before "${confirm.label}".`}
+          title={t("history.confirmRestoreSnapshot", { when: absoluteTime(confirm.createdAt) })}
+          description={t("history.confirmRestoreSnapshotBody", {
+            agent: agent === "codex" ? "Codex" : "Claude Code",
+            label: confirm.label,
+          })}
           onConfirm={() => call("restore_snapshot", { agent, snapshotId: confirm.id })}
           onClose={() => setConfirm(null)}
           onRestored={reload}
@@ -228,7 +224,7 @@ function SnapshotList({ agent }: { agent: AgentId }) {
 
 function RecoveryPanel({ agent }: { agent: AgentId }) {
   const [pending, setPending] = useState<"default" | "original" | "stock" | null>(null);
-  const { agents } = useApp();
+  const { agents, t } = useApp();
   const agentSummary = agents.find((item) => item.agent === agent);
   const action = useAction();
   const {
@@ -250,58 +246,53 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
   const undo = () =>
     void action
       .run(() => call("undo_last_change", { agent }), {
-        success: "The last change was undone.",
+        success: t("toast.undoDone"),
       })
       .then(reload);
 
   if (error) return <ErrorState error={error} onRetry={reload} />;
-  if (loading && !status) return <LoadingState label="Checking recovery options…" />;
-  if (!status) return <ErrorState error="Recovery options could not be read." />;
+  if (loading && !status) return <LoadingState label={t("history.checkingRecovery")} />;
+  if (!status) return <ErrorState error={t("history.recoveryUnreadable")} />;
 
   return (
     <>
       {status.externalConfiguration && (
-        <Banner tone="warn" title="Your configuration was not written by Eclyzer Bridge">
-          This agent is using a custom configuration Eclyzer Bridge did not create. Restoring the
-          default would replace it, so the option below is offered with that in mind.
+        <Banner tone="warn" title={t("history.externalTitle")}>
+          {t("history.externalBody")}
         </Banner>
       )}
 
       <Meta
         items={[
           {
-            key: "Currently",
+            key: t("history.currently"),
             value: status.hasManagedConfiguration
-              ? "Eclyzer Bridge configuration is active"
+              ? t("history.currentManaged")
               : status.externalConfiguration
-                ? "External configuration"
-                : "Default configuration",
+                ? t("status.externalConfiguration")
+                : t("home.defaultConfiguration"),
           },
           {
-            key: "Original backup",
-            value: status.hasOriginal
-              ? "Saved — the state before Eclyzer Bridge first changed anything"
-              : "Not saved yet",
+            key: t("history.originalBackup"),
+            value: status.hasOriginal ? t("history.originalSaved") : t("history.originalMissing"),
           },
-          { key: "Snapshots", value: String(status.snapshotCount) },
+          { key: t("history.tabSnapshots"), value: String(status.snapshotCount) },
           {
-            key: "Last change",
-            value: status.lastChangeLabel ?? "None recorded",
+            key: t("history.lastChange"),
+            value: status.lastChangeLabel ?? t("history.empty"),
           },
         ]}
       />
 
       <div className="stack stack--tight">
-        <h2>Undo the last change</h2>
+        <h2>{t("history.undoTitle")}</h2>
         <p className="card__hint">
-          Returns this agent to the state just before its most recent change.
-          {status.canUndo
-            ? " The current state is snapshotted first, so you can undo the undo."
-            : " Nothing to undo right now."}
+          {t("history.undoBody")}
+          {status.canUndo ? t("history.undoReversible") : t("history.undoNothing")}
         </p>
         <div>
           <Button onClick={undo} busy={action.busy} disabled={!status.canUndo}>
-            Undo last change
+            {t("history.undoButton")}
           </Button>
         </div>
       </div>
@@ -309,32 +300,25 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
       <hr className="divider" />
 
       <div className="stack stack--tight">
-        <h2>Restore what Eclyzer Bridge changed</h2>
-        <p className="card__hint">
-          Removes the provider Eclyzer Bridge added, returning this agent to its own default.
-          Everything else in your configuration — comments, other providers, sandbox settings — is
-          left untouched. Settings you configured yourself are kept, even if they look like
-          something Eclyzer Bridge would write.
-        </p>
+        <h2>{t("history.restoreDefaultTitle")}</h2>
+        <p className="card__hint">{t("history.restoreDefaultBody")}</p>
         <div>
-          <Button onClick={() => setPending("default")}>Restore default</Button>
+          <Button onClick={() => setPending("default")}>{t("history.restoreDefaultButton")}</Button>
         </div>
       </div>
 
       <hr className="divider" />
 
       <div className="stack stack--tight">
-        <h2>Restore the original configuration</h2>
+        <h2>{t("history.restoreOriginalTitle")}</h2>
         <p className="card__hint">
           {status.hasOriginal
-            ? "Puts back the exact file that existed before Eclyzer Bridge ever touched this agent." +
-              " This is a historical restore, not a factory reset: if that file already contained" +
-              " your own gateway URL, model, or aliases, those values come back."
-            : "Available once Eclyzer Bridge has changed this agent at least once."}
+            ? t("history.restoreOriginalBody")
+            : t("history.restoreOriginalUnavailable")}
         </p>
         <div>
           <Button onClick={() => setPending("original")} disabled={!status.hasOriginal}>
-            Restore original
+            {t("history.restoreOriginalButton")}
           </Button>
         </div>
       </div>
@@ -342,22 +326,18 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
       <hr className="divider" />
 
       <div className="stack stack--tight">
-        <h2>Reset {agentSummary?.displayName ?? agent} to stock defaults</h2>
+        <h2>{t("history.resetTitle", { agent: agentSummary?.displayName ?? agent })}</h2>
         <p className="card__hint">
-          Removes <strong>every</strong> custom provider and model override — including any you
-          configured yourself before using Eclyzer Bridge — so {agentSummary?.displayName ?? agent}{" "}
-          goes back to its normal built-in configuration. Your login, sessions, MCP configuration,
-          permissions, and unrelated settings are kept.
+          {t("history.resetBody", { agent: agentSummary?.displayName ?? agent })}
         </p>
         {preview?.blockedByManaged?.length ? (
           <p className="field__error" role="alert">
-            Your organization manages this setting at {preview.blockedByManaged.join(", ")}. Eclyzer
-            Bridge will not change it, so a reset may not take effect. Ask your administrator.
+            {t("history.managedWarning", { paths: preview.blockedByManaged.join(", ") })}
           </p>
         ) : null}
         <div>
           <Button variant="danger" onClick={() => setPending("stock")}>
-            Reset to stock defaults…
+            {t("history.resetButton")}
           </Button>
         </div>
       </div>
@@ -377,13 +357,13 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
           agent={agent}
           title={
             pending === "default"
-              ? "Restore the default configuration?"
-              : "Restore the original configuration?"
+              ? t("history.confirmRestoreDefault")
+              : t("history.confirmRestoreOriginal")
           }
           description={
             pending === "default"
-              ? "The provider Eclyzer Bridge added is removed. Your other settings stay as they are."
-              : "Your configuration file is replaced with the copy saved before Eclyzer Bridge first changed it. Any changes you made since then are lost."
+              ? t("history.confirmRestoreDefaultBody")
+              : t("history.confirmRestoreOriginalBody")
           }
           onConfirm={() =>
             call(pending === "default" ? "restore_default" : "restore_original", {
@@ -418,15 +398,15 @@ function StockResetDialog({
   onClose: () => void;
   onReset: () => void;
 }) {
-  const { notify } = useApp();
+  const { notify, t } = useApp();
   const action = useAction();
   const [failure, setFailure] = useState<string | null>(null);
 
-  const rows: Array<[string, Array<[string, string]>]> = preview
+  const rows: Array<[MessageKey, Array<[string, string]>]> = preview
     ? [
-        ["Provider and credential", preview.envKeys],
-        ["Model aliases", preview.aliasKeys],
-        ["Model selection", preview.rootKeys],
+        ["history.resetGroupProvider", preview.envKeys],
+        ["history.resetGroupAliases", preview.aliasKeys],
+        ["history.resetGroupModel", preview.rootKeys],
       ]
     : [];
   const shown = rows.filter(([, entries]) => entries.length > 0);
@@ -443,9 +423,12 @@ function StockResetDialog({
         if (result) {
           notify(
             "success",
-            `${displayName} reset to stock defaults.`,
+            t("toast.resetDone", { agent: displayName }),
             result.managedKeys.length > 0
-              ? `Removed ${result.managedKeys.length} setting${result.managedKeys.length === 1 ? "" : "s"}.`
+              ? t(
+                  result.managedKeys.length === 1 ? "toast.resetRemovedOne" : "toast.resetRemoved",
+                  { count: result.managedKeys.length },
+                )
               : undefined,
           );
           onReset();
@@ -454,20 +437,16 @@ function StockResetDialog({
       });
 
   return (
-    <Modal title={`Reset ${displayName} to stock defaults?`} onClose={onClose}>
+    <Modal title={t("history.resetConfirmTitle", { agent: displayName })} onClose={onClose}>
       <div className="stack stack--tight">
-        <p>
-          This removes custom model and provider overrides,{" "}
-          <strong>including settings not created by Eclyzer Bridge</strong>. Your login, sessions,
-          MCP configuration, permissions, and unrelated settings will be kept.
-        </p>
+        <p>{t("history.resetConfirmBody")}</p>
 
         {shown.length > 0 ? (
           <div className="stack stack--tight">
-            <p className="card__hint">These settings will be removed:</p>
+            <p className="card__hint">{t("history.resetWillRemove")}</p>
             {shown.map(([label, entries]) => (
               <div key={label}>
-                <div className="field__label">{label}</div>
+                <div className="field__label">{t(label)}</div>
                 <ul className="list-plain mono small">
                   {entries.map(([key, value]) => (
                     <li key={key}>
@@ -480,16 +459,10 @@ function StockResetDialog({
             ))}
           </div>
         ) : (
-          <p className="card__hint">
-            No provider or model overrides were found, so this changes nothing. You can still run it
-            to be sure.
-          </p>
+          <p className="card__hint">{t("history.resetNothing")}</p>
         )}
 
-        <p className="card__hint">
-          A snapshot is taken first, so you can undo this or restore the original configuration
-          afterwards.
-        </p>
+        <p className="card__hint">{t("history.resetSnapshot")}</p>
 
         {failure ? (
           <p className="field__error" role="alert">
@@ -499,10 +472,10 @@ function StockResetDialog({
 
         <div className="row row--end">
           <Button variant="ghost" onClick={onClose} disabled={action.busy}>
-            Cancel
+            {t("action.cancel")}
           </Button>
           <Button variant="danger" onClick={go} busy={action.busy}>
-            Reset {displayName}
+            {t("history.resetAction", { agent: displayName })}
           </Button>
         </div>
       </div>
@@ -526,7 +499,7 @@ function RestoreConfirmDialog({
   onClose: () => void;
   onRestored: () => void;
 }) {
-  const { notify } = useApp();
+  const { notify, t } = useApp();
   const action = useAction();
   const [outcome, setOutcome] = useState<ApplyOutcome | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -543,7 +516,7 @@ function RestoreConfirmDialog({
         if (result) {
           setOutcome(result);
           onRestored();
-          notify("success", "Configuration restored.");
+          notify("success", t("history.restored"));
         }
       });
 
@@ -554,15 +527,15 @@ function RestoreConfirmDialog({
       footer={
         outcome ? (
           <Button variant="primary" onClick={onClose}>
-            Done
+            {t("action.done")}
           </Button>
         ) : (
           <>
             <Button variant="ghost" onClick={onClose}>
-              Cancel
+              {t("action.cancel")}
             </Button>
             <Button variant="primary" onClick={go} busy={action.busy}>
-              Restore
+              {t("history.restore")}
             </Button>
           </>
         )
@@ -570,39 +543,38 @@ function RestoreConfirmDialog({
     >
       {outcome ? (
         <>
-          <Banner tone="info" title="Restored">
-            {agent === "codex" ? "Codex" : "Claude Code"} configuration has been written and
-            verified.
+          <Banner tone="info" title={t("history.restored")}>
+            {t("history.restoredBody", { agent: agent === "codex" ? "Codex" : "Claude Code" })}
           </Banner>
           <Meta
             items={[
-              { key: "Config file", value: outcome.configPath, mono: true },
+              { key: t("home.configFile"), value: outcome.configPath, mono: true },
               {
-                key: "Now active",
+                key: t("history.nowActive"),
                 value: outcome.active.label,
               },
               {
-                key: "Snapshot taken",
+                key: t("history.snapshotTaken"),
                 value: outcome.snapshotId,
                 mono: true,
               },
               {
-                key: "Keys updated",
-                value: outcome.managedKeys.length > 0 ? outcome.managedKeys.join(", ") : "none",
+                key: t("history.keysUpdated"),
+                value:
+                  outcome.managedKeys.length > 0
+                    ? outcome.managedKeys.join(", ")
+                    : t("settings.none"),
                 mono: true,
               },
             ]}
           />
-          <p className="muted small">
-            The state you just replaced was snapshotted, so this is reversible from the Snapshots
-            list.
-          </p>
+          <p className="muted small">{t("history.reversibleNote")}</p>
         </>
       ) : (
         <>
           <p className="muted small">{description}</p>
-          <Banner tone="warn" title="A snapshot is taken first">
-            Whatever is there now is saved, so you can undo this.
+          <Banner tone="warn" title={t("history.snapshotFirstTitle")}>
+            {t("history.snapshotFirstBody")}
           </Banner>
           {failure && (
             <div className="field__error" role="alert">

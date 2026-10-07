@@ -50,8 +50,7 @@ const STEP_WORD: Record<TestStepState, MessageKey> = {
  * duplication that once let the badge and the Activate button disagree about
  * whether a provider had been tested; one mapping means they cannot.
  */
-const compatibilityWord = (status: string | undefined): MessageKey =>
-  compatibilityLabel(status);
+const compatibilityWord = (status: string | undefined): MessageKey => compatibilityLabel(status);
 
 function toneFor(status: string): StatusTone {
   switch (status) {
@@ -89,9 +88,7 @@ export function TestResults({
         <Badge tone={toneFor(outcome.status)} dot>
           {t(compatibilityWord(outcome.status))}
         </Badge>
-        {total > 0 && (
-          <span className="small dim">{t("test.summary", { passed, total })}</span>
-        )}
+        {total > 0 && <span className="small dim">{t("test.summary", { passed, total })}</span>}
         {outcome.latencyMs !== undefined && (
           <span className="small dim mono">{latency(outcome.latencyMs)}</span>
         )}
@@ -109,9 +106,7 @@ export function TestResults({
           backend rephrases. An unknown code falls back to the backend's own text,
           which carries the detail specific to this run. */}
       <div className="small">
-        <span className="muted">
-          {reasonText(outcome.reasonCode, outcome.reason, language)}
-        </span>
+        <span className="muted">{reasonText(outcome.reasonCode, outcome.reason, language)}</span>
       </div>
 
       {outcome.warning && (
@@ -145,15 +140,7 @@ export function TestResults({
   );
 }
 
-function StepRow({
-  step,
-  t,
-  language,
-}: {
-  step: TestStep;
-  t: Translate;
-  language: Language;
-}) {
+function StepRow({ step, t, language }: { step: TestStep; t: Translate; language: Language }) {
   return (
     <div className="step">
       <span className={`step__state step__state--${step.state}`} aria-hidden="true">
@@ -193,9 +180,7 @@ export function formatOutcome(
 ): string {
   const lines: string[] = [];
   lines.push(`${t("test.title")} - ${outcome.agent}`);
-  lines.push(
-    `${t("history.result")}: ${t(compatibilityWord(outcome.status))}`,
-  );
+  lines.push(`${t("history.result")}: ${t(compatibilityWord(outcome.status))}`);
   lines.push(`${t("test.reason")}: ${reasonText(outcome.reasonCode, outcome.reason, language)}`);
   if (outcome.warning) lines.push(`${t("test.warning")}: ${outcome.warning}`);
   if (outcome.latencyMs !== undefined) {

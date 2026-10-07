@@ -8,14 +8,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import {
-  absoluteTime,
-  bytes,
-  folderName,
-  latency,
-  relativeTime,
-  truncate,
-} from "./format";
+import { absoluteTime, bytes, folderName, latency, relativeTime, truncate } from "./format";
 
 describe("relativeTime", () => {
   const now = Date.parse("2025-10-06T12:00:00Z");

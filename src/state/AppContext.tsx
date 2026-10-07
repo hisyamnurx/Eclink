@@ -223,8 +223,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const dictionary = useMemo(() => dictionaryFor(language), [language]);
 
   const t = useCallback(
-    (key: MessageKey, values?: Interpolations) =>
-      translate(dictionary, key, values),
+    (key: MessageKey, values?: Interpolations) => translate(dictionary, key, values),
     [dictionary],
   );
 

@@ -17,12 +17,7 @@ import { resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import {
-  KNOWN_REASON_CODES,
-  KNOWN_STEP_IDS,
-  reasonText,
-  stepLabel,
-} from "./backend-text";
+import { KNOWN_REASON_CODES, KNOWN_STEP_IDS, reasonText, stepLabel } from "./backend-text";
 
 const PIPELINE = readFileSync(
   resolve(__dirname, "../../src-tauri/src/testing/pipeline.rs"),

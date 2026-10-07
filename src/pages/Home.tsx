@@ -27,6 +27,7 @@ import {
 } from "../components/ui";
 import { ApiError, call, type AgentId, type AgentSummary } from "../lib/api";
 import { relativeTime } from "../lib/format";
+import { compatibilityLabel } from "../lib/compatibility";
 import type { MessageKey } from "../lib/i18n";
 import { openUrl, pickFolder } from "../lib/opener";
 import { useAction, useApp } from "../state/AppContext";
@@ -37,16 +38,10 @@ interface HomeProps {
   onPlayground: (agent: AgentId) => void;
 }
 
-/** The compatibility status word for a record, as a key rather than English. */
-const COMPATIBILITY_WORD: Record<string, MessageKey> = {
-  compatible: "status.compatible",
-  partially_compatible: "status.partiallyCompatible",
-  incompatible: "status.incompatible",
-  unknown: "status.notDetermined",
-  test_failed: "status.testFailed",
-  testing: "status.testing",
-  untested: "status.notTested",
-};
+/* The status-to-word mapping is not duplicated here: it lives in
+ * `lib/compatibility`. This file, TestResults, and the provider list each used to
+ * carry their own copy, which is how the badge and the Activate button once came to
+ * disagree about whether a provider had been tested. */
 
 export function Home({ onConfigure, onHistory, onPlayground }: HomeProps) {
   const { agents, profiles, loading, loadError, reload, t } = useApp();
@@ -196,9 +191,7 @@ function AgentCard({
           {
             key: t("home.lastTested"),
             value: record?.testedAt
-              ? `${t(COMPATIBILITY_WORD[record.status] ?? "status.notTested")} · ${relativeTime(
-                  record.testedAt,
-                )}`
+              ? `${t(compatibilityLabel(record?.status))} · ${relativeTime(record.testedAt)}`
               : t("status.notTested"),
           },
           {
@@ -258,8 +251,7 @@ function ActiveValue({ agent }: { agent: AgentSummary }) {
   }
   return (
     <>
-      {t("home.defaultConfiguration")}{" "}
-      <span className="dim small">({t("home.defaultHint")})</span>
+      {t("home.defaultConfiguration")} <span className="dim small">({t("home.defaultHint")})</span>
     </>
   );
 }
