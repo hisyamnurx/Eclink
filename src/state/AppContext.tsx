@@ -177,9 +177,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const saveSettings = useCallback(async (patch: Partial<AppSettings>) => {
-    // Send only the fields the backend accepts. `lastProjectDirectory` is
-    // included because the backend writes it when the user launches with
-    // "remember this folder" enabled.
+    // Send only the fields the backend accepts, but send ALL of them. The patch is
+    // built field by field rather than passed through, so a field that is not listed
+    // here is silently dropped: the backend then returns the unchanged settings and
+    // the caller's optimistic state is reverted to the old value.
+    //
+    // `language` was exactly that case. Selecting Bahasa Indonesia called
+    // `update_settings` without a language, the backend kept `"en"`, and
+    // `setSettings(result)` immediately put English back, so the picker looked like
+    // it saved and the interface never changed. Anything added to SettingsPatch must
+    // be listed here.
     const result = await call("update_settings", {
       patch: {
         updateCheck: patch.updateCheck,
@@ -189,6 +196,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         costNoticeSeen: patch.costNoticeSeen,
         insecureEndpointNoticeSeen: patch.insecureEndpointNoticeSeen,
         lastProjectDirectory: patch.lastProjectDirectory,
+        language: patch.language,
       },
     });
     setSettings(result);
@@ -229,12 +237,26 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
   const setLanguage = useCallback(
     async (next: Language) => {
-      // Applied optimistically through the shared settings state so the UI
-      // switches in the same tick, then persisted. A failed write leaves the
-      // previous choice in the file, which the next load will read.
-      await saveSettings({ language: next });
+      // Applied to state first, then persisted, so the visible interface switches
+      // immediately rather than waiting for a round trip. The previous version
+      // awaited the IPC call before touching state, which meant the language only
+      // changed after `update_settings` replied.
+      //
+      // On failure the previous value is put back, so the runtime choice and the
+      // stored one cannot disagree: leaving the interface in a language the file does
+      // not record would silently revert on the next launch.
+      const previous = settings?.language;
+      setSettings((current) => (current ? { ...current, language: next } : current));
+      try {
+        await saveSettings({ language: next });
+      } catch (error) {
+        setSettings((current) =>
+          current && previous !== undefined ? { ...current, language: previous } : current,
+        );
+        throw error;
+      }
     },
-    [saveSettings],
+    [saveSettings, settings?.language],
   );
 
   const value = useMemo<AppContextValue>(

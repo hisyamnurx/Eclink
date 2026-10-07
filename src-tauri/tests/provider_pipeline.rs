@@ -277,7 +277,7 @@ const OK_MESSAGES: &str = r#"{"id":"msg_1","type":"message","role":"assistant",
 ///
 /// The model step looks the model up by id, so a list that omits it would fail
 /// that step and mask what the test is actually checking.
-const MODELS_OK: &str = r#"{"data":[{"id":"test-model","object":"model"},{"id":"m","object":"model"},{"id":"example-model","object":"model"},{"id":"vendor_a/example-model","object":"model"},{"id":"dual-model","object":"model"}]}"#;
+const MODELS_OK: &str = r#"{"data":[{"id":"test-model","object":"model"},{"id":"m","object":"model"},{"id":"example-model","object":"model"},{"id":"vendor_a/example-model","object":"model"},{"id":"dual-model","object":"model"},{"id":"combo_a","object":"model"},{"id":"provider_b","object":"model"}]}"#;
 
 /// An Anthropic-shaped stream carrying a tool call.
 ///
@@ -1524,4 +1524,276 @@ async fn a_gateway_serving_v1_in_its_base_url_is_probed_at_the_right_route() {
         !paths.iter().any(|p| p.contains("/v1/v1/")),
         "a duplicated version segment was sent: {paths:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Translating gateways.
+//
+// The reported false negative: the gateway accepts Anthropic Messages on its
+// client-facing route and translates to an OpenAI-compatible upstream. Bridge
+// called it incompatible. The cause was that the gateway answers with an event stream
+// even when `stream` was false, the probe tried to parse that as JSON, and the
+// failure was reported as "does not serve Anthropic Messages".
+//
+// Verified against a running the gateway: `POST /v1/messages` with an `x-api-key` and
+// `anthropic-version` returns 200 and a `message_start` stream, so the endpoint
+// works and the probe was wrong. These tests keep the probe honest without needing
+// the gateway to be running.
+// ---------------------------------------------------------------------------
+
+/// An Anthropic reply delivered as an event stream, which is what the gateway sends
+/// even for a request that did not ask to stream.
+const SSE_ANTHROPIC_MESSAGE_START: &str = concat!(
+    "event: message_start\n",
+    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"m\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+    "event: content_block_start\n",
+    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"OK\"}}\n\n",
+    "event: message_stop\n",
+    "data: {\"type\":\"message_stop\"}\n\n",
+);
+
+/// A Responses reply delivered as an event stream, for the same reason.
+const SSE_RESPONSES_MINIMAL: &str = concat!(
+    "event: response.created\n",
+    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"in_progress\"}}\n\n",
+    "event: response.completed\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"object\":\"response\",\"status\":\"completed\"}}\n\n",
+);
+
+/// A gateway that answers Anthropic Messages as a stream, like the gateway.
+fn streaming_anthropic_gateway() -> MockServer {
+    MockServer::start(vec![
+        // The protocol probe gets the stream, because the gateway streams regardless.
+        (
+            "/v1/messages".into(),
+            Response::sse(SSE_ANTHROPIC_MESSAGE_START),
+        ),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ])
+}
+
+#[test]
+fn an_anthropic_event_stream_counts_as_the_anthropic_protocol() {
+    // The exact false negative. A stream is not JSON, but it is a working
+    // Anthropic endpoint, and reporting otherwise tells the user their gateway is
+    // incompatible when it works with Claude Code today.
+    let server = streaming_anthropic_gateway();
+    let base = format!("{}/v1", server.base_url);
+    let target = ProbeTarget::new(
+        &base,
+        "combo_a",
+        Secret::new("sk-test"),
+        AuthMode::XApiKey,
+        Some(10_000),
+    )
+    .expect("target");
+
+    let runtime = tokio::runtime::Runtime::new().expect("runtime");
+    let result = runtime.block_on(probe_claude_protocol(&target));
+
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Supported,
+        "a streamed Anthropic reply must count as support; detail was {:?}",
+        result.detail
+    );
+    // The detail should say why, so a user seeing it understands a gateway streams.
+    let detail = result.detail.unwrap_or_default();
+    assert!(
+        detail.contains("event stream"),
+        "the explanation should mention the stream, got: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn a_translating_gateway_is_claude_compatible_end_to_end() {
+    // Requirement: a gateway whose client-facing /v1/messages works is
+    // Claude-compatible, whatever protocol it uses upstream.
+    let server = streaming_anthropic_gateway();
+    let base = format!("{}/v1", server.base_url);
+    let profile = profile_for(&base, "combo_a", AgentId::Claude);
+
+    let outcome = test_profile(&profile, AgentId::Claude, Secret::new("sk-test"))
+        .await
+        .expect("the pipeline runs");
+
+    let states = step_states(&outcome);
+    let protocol = outcome
+        .steps
+        .iter()
+        .find(|s| s.id == "protocol")
+        .expect("the protocol step ran");
+    assert_eq!(
+        format!("{:?}", protocol.state),
+        "Passed",
+        "a translating gateway must pass the protocol step; steps were {states:?}"
+    );
+    assert_ne!(
+        outcome.status,
+        CompatibilityStatus::Incompatible,
+        "a gateway serving /v1/messages must not be Incompatible for Claude Code; \
+         reason was {}",
+        outcome.reason
+    );
+}
+
+#[tokio::test]
+async fn a_streaming_gateway_is_not_penalised_for_answering_with_a_stream() {
+    // The same gateway must still be judged on its merits: serving an event stream
+    // is normal, and the protocol and streaming steps must pass.
+    //
+    // Tool calling is only a Warning here, and correctly so: this fixture's stream
+    // carries text but no tool invocation, and a model that answers in prose is not
+    // a compatibility failure. The verdict is therefore PartiallyCompatible rather
+    // than Compatible, which is the honest reading of what the endpoint returned.
+    let server = streaming_anthropic_gateway();
+    let base = format!("{}/v1", server.base_url);
+    let profile = profile_for(&base, "combo_a", AgentId::Claude);
+
+    let outcome = test_profile(&profile, AgentId::Claude, Secret::new("sk-test"))
+        .await
+        .expect("the pipeline runs");
+
+    let states = step_states(&outcome);
+    for step in ["protocol", "streaming"] {
+        let state = outcome
+            .steps
+            .iter()
+            .find(|s| s.id == step)
+            .map(|s| format!("{:?}", s.state))
+            .unwrap_or_default();
+        assert_eq!(state, "Passed", "{step} was {state}; steps were {states:?}");
+    }
+    assert_ne!(
+        outcome.status,
+        CompatibilityStatus::Incompatible,
+        "a streaming Anthropic gateway must not be Incompatible; steps were {states:?}"
+    );
+}
+
+#[tokio::test]
+async fn one_protocol_succeeding_does_not_invalidate_another() {
+    // Requirement: a gateway may expose Responses, Chat Completions, and Anthropic
+    // Messages at the same time. They are independent questions, so a success on one
+    // must never be read as evidence against another.
+    let server = MockServer::start(vec![
+        (
+            "/v1/messages".into(),
+            Response::sse(SSE_ANTHROPIC_MESSAGE_START),
+        ),
+        ("/responses".into(), Response::sse(SSE_RESPONSES_MINIMAL)),
+        ("/v1/chat/completions".into(), Response::json(200, OK_CHAT)),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+    let base = format!("{}/v1", server.base_url);
+    let target = ProbeTarget::new(
+        &base,
+        "test-model",
+        Secret::new("sk-test"),
+        AuthMode::XApiKey,
+        Some(10_000),
+    )
+    .expect("target");
+
+    let caps = probe_protocols(&target).await;
+    assert!(
+        caps.supports(Protocol::AnthropicMessages),
+        "Anthropic Messages answered but was not recorded as supported"
+    );
+    assert!(
+        caps.supports(Protocol::OpenAiResponses),
+        "Responses answered but was not recorded as supported"
+    );
+    // Both agents are served, and neither result cancels the other.
+    assert!(caps.serves(AgentId::Claude), "Claude must be served");
+    assert!(caps.serves(AgentId::Codex), "Codex must be served");
+}
+
+#[tokio::test]
+async fn a_gateway_that_only_streams_is_still_rejected_when_the_route_is_absent() {
+    // The fix must not make every stream look compatible. A gateway that streams a
+    // non-Anthropic payload must still be reported as not serving the protocol.
+    let server = MockServer::start(vec![
+        (
+            "/v1/messages".into(),
+            Response::sse("event: something\ndata: {\"unrelated\":true}\n\n"),
+        ),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+    let base = format!("{}/v1", server.base_url);
+    let target = ProbeTarget::new(
+        &base,
+        "test-model",
+        Secret::new("sk-test"),
+        AuthMode::XApiKey,
+        Some(10_000),
+    )
+    .expect("target");
+
+    let result = probe_claude_protocol(&target).await;
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Unsupported,
+        "a stream that is not an Anthropic message must not count as support"
+    );
+}
+
+#[tokio::test]
+async fn an_empty_stream_is_not_treated_as_a_working_endpoint() {
+    // A 200 with no events is not a usable reply, so it must not be optimistically
+    // reported as compatible.
+    let server = MockServer::start(vec![
+        (
+            "/v1/messages".into(),
+            Response::sse("event: message_stop\n\n"),
+        ),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+    let base = format!("{}/v1", server.base_url);
+    let target = ProbeTarget::new(
+        &base,
+        "test-model",
+        Secret::new("sk-test"),
+        AuthMode::XApiKey,
+        Some(10_000),
+    )
+    .expect("target");
+
+    let result = probe_claude_protocol(&target).await;
+    assert_eq!(
+        result.outcome,
+        ProbeOutcome::Unsupported,
+        "an event stream with no data lines proves nothing"
+    );
+}
+
+#[tokio::test]
+async fn the_anthropic_route_resolves_exactly_for_a_local_gateway() {
+    // The reported base URL. It must never become /v1/v1/messages.
+    for (base, expected) in [
+        (
+            "http://localhost:41000/v1",
+            "http://localhost:41000/v1/messages",
+        ),
+        (
+            "http://localhost:41000",
+            "http://localhost:41000/v1/messages",
+        ),
+        (
+            "http://localhost:41000/v1/",
+            "http://localhost:41000/v1/messages",
+        ),
+    ] {
+        assert_eq!(
+            eclyzer_bridge_lib::profiles::resolve_endpoint(
+                base,
+                eclyzer_bridge_lib::profiles::ApiProtocol::AnthropicMessages
+            )
+            .expect("resolves"),
+            expected,
+            "base {base}"
+        );
+    }
 }

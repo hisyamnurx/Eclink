@@ -74,6 +74,10 @@ impl ApiProtocol {
 }
 
 /// Why an endpoint could not be resolved.
+///
+/// Implements `std::error::Error` so callers can propagate it with `?` into a
+/// `Box<dyn Error>` instead of unwrapping. The message is the whole payload, so no
+/// separate `source` is carried.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ResolveError {
     /// The stored base URL is not a URL at all.
@@ -87,6 +91,8 @@ impl std::fmt::Display for ResolveError {
         }
     }
 }
+
+impl std::error::Error for ResolveError {}
 
 /// Whether a path segment is an API version marker such as `v1` or `v2`.
 ///

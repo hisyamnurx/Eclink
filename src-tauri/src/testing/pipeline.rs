@@ -555,9 +555,13 @@ fn verdict(
 /// actually serves.
 ///
 /// This turns "the endpoint does not serve this API route" into something
-/// actionable. The user's real report was `404 Route POST:/v1/messages not
-/// found`, which on its own reads like a broken endpoint; what it actually meant
-/// was that their provider speaks the OpenAI shape and Claude Code cannot use it.
+/// actionable. A bare `404 Route POST:/v1/messages not found` reads like a broken
+/// endpoint; what it usually means is that the provider speaks a different shape.
+///
+/// Each protocol is probed on its own, and the results are independent. A gateway
+/// may serve several at once - a translating gateway commonly accepts Anthropic
+/// Messages and forwards to an OpenAI-compatible upstream - so the wording here
+/// names what answered without implying that one result rules out another.
 ///
 /// The extra probes only run on the failure path, so a working provider never
 /// pays for them.
@@ -565,17 +569,19 @@ async fn protocol_mismatch_note(
     target: &probes::ProbeTarget,
     required: probes::Protocol,
 ) -> String {
+    let agent = required
+        .required_by()
+        .map(|agent| agent.display_name())
+        .unwrap_or("this agent");
     let mut note = format!(
-        "This provider does not serve {} ({}), which {} requires.",
+        "This provider did not accept {} ({}), which {} requires.",
         required.label(),
         required.route(),
-        required
-            .required_by()
-            .map(|agent| agent.display_name())
-            .unwrap_or("this agent")
+        agent
     );
 
-    // Ask for the other shapes so the message can name what *is* available.
+    // Ask for the other shapes so the message can name what *did* answer. These are
+    // separate questions; a provider supporting one says nothing about the others.
     let mut available: Vec<&str> = Vec::new();
     for other in probes::Protocol::ALL {
         if other == required {
@@ -598,13 +604,16 @@ async fn protocol_mismatch_note(
     if available.is_empty() {
         note.push_str(" No other known API route answered either.");
     } else {
+        // Deliberately not "instead": serving another API as well is normal, and
+        // saying so would wrongly imply the provider can only be one thing.
         note.push_str(&format!(
-            " This provider serves {} instead. Eclyzer Bridge does not translate between APIs, so this provider cannot be used with {}.",
+            " It does answer {}, so the endpoint is reachable and the credential was \
+             accepted; only the {} route is missing. Eclyzer Bridge does not translate \
+             between APIs, so {} cannot be used with it unless the provider or a \
+             gateway in front of it exposes that route.",
             available.join(" and "),
-            required
-                .required_by()
-                .map(|agent| agent.display_name())
-                .unwrap_or("this agent")
+            required.label(),
+            agent
         ));
     }
     note

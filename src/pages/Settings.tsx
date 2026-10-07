@@ -69,7 +69,14 @@ export function Settings() {
               // narrowing of a value already known to be valid rather than a
               // check the user could fail.
               const next = event.target.value;
-              if (isLanguage(next)) void setLanguage(next);
+              if (!isLanguage(next)) return;
+              // Reported rather than swallowed. A silent failure here is
+              // indistinguishable from a language that refuses to change, which is
+              // exactly how the previous bug presented itself.
+              void setLanguage(next).catch((error: unknown) => {
+                const api = error as { message?: string; hint?: string };
+                notify("error", api.message ?? t("settings.couldNotSave"), api.hint);
+              });
             }}
           >
             {LANGUAGES.map((code) => (

@@ -503,7 +503,7 @@ const id: Dictionary = {
 
   "action.cancel": "Batal",
   "action.delete": "Hapus",
-  "action.edit": "Ubah",
+  "action.edit": "Edit",
   "action.duplicate": "Duplikat",
   "action.test": "Tes",
   "action.activate": "Aktifkan",
@@ -752,13 +752,13 @@ const id: Dictionary = {
   "history.restoreDefaultTitle": "Kembalikan yang diubah Eclyzer Bridge",
   "history.restoreDefaultBody":
     "Menghapus provider yang ditambahkan Eclyzer Bridge dan mengembalikan agent ini ke default-nya. Sisanya tidak disentuh. Setting yang kamu buat sendiri tetap dipertahankan, meskipun terlihat seperti buatan Eclyzer Bridge.",
-  "history.restoreDefaultButton": "Kembalikan default",
-  "history.restoreOriginalTitle": "Kembalikan konfigurasi asli",
+  "history.restoreDefaultButton": "Pulihkan bawaan",
+  "history.restoreOriginalTitle": "Pulihkan konfigurasi awal",
   "history.restoreOriginalBody":
     "Mengembalikan file persis seperti sebelum Eclyzer Bridge menyentuh agent ini. Ini pemulihan historis, bukan reset pabrik: kalau file itu sudah berisi URL gateway, model, atau alias milikmu, nilai itu ikut kembali.",
   "history.restoreOriginalUnavailable":
     "Tersedia setelah Eclyzer Bridge mengubah agent ini minimal sekali.",
-  "history.restoreOriginalButton": "Kembalikan asli",
+  "history.restoreOriginalButton": "Pulihkan konfigurasi awal",
   "history.checkingRecovery": "Memeriksa opsi pemulihan...",
   "history.recoveryUnreadable": "Opsi pemulihan tidak bisa dibaca.",
   "history.currently": "Saat ini",
