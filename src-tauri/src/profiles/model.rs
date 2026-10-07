@@ -196,11 +196,24 @@ pub fn user_headers(options: &AdvancedOptions) -> Vec<(String, String)> {
 }
 
 /// A stored provider profile.
+///
+/// Every field that a profile can meaningfully survive without carries
+/// `#[serde(default)]`. That is not tidiness: `Profile` is the element type of the
+/// saved array, so a field without a default makes the *whole file* fail to parse
+/// when it is missing, and the user is shown no providers at all rather than one
+/// incomplete entry. `targets`, `createdAt`, and `updatedAt` were all required, so a
+/// file written before those fields existed could not be read.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Profile {
+    /// Generated when absent, so a hand-edited file still loads and the profile can
+    /// still be addressed by the secret store and the UI.
+    #[serde(default = "generate_id")]
     pub id: String,
     pub name: String,
+    /// Defaults to empty when absent. `ProfileStore::load` fills it from `name`, so
+    /// a file written before this field existed still shows a usable label.
+    #[serde(default)]
     pub provider_name: String,
     pub base_url: String,
     pub model: String,
@@ -208,6 +221,10 @@ pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secret_ref: Option<String>,
     /// Agents this profile is intended for.
+    ///
+    /// Empty means no agent is selected yet; the profile still loads and can be
+    /// edited rather than disappearing.
+    #[serde(default)]
     pub targets: Vec<AgentId>,
     #[serde(default)]
     pub advanced: AdvancedOptions,
@@ -216,8 +233,17 @@ pub struct Profile {
     pub compatibility: std::collections::BTreeMap<AgentId, CompatibilityRecord>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes: Option<String>,
+    /// Timestamps. Absent on a file written before they were recorded, and the
+    /// formatters already render an unparsable value as "unknown".
+    #[serde(default)]
     pub created_at: String,
+    #[serde(default)]
     pub updated_at: String,
+}
+
+/// A fresh profile identifier, for deserialising a profile that lacks one.
+fn generate_id() -> String {
+    uuid::Uuid::new_v4().to_string()
 }
 
 impl Profile {

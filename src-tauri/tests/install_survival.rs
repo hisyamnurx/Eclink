@@ -229,3 +229,119 @@ fn maintenance_tools_live_in_examples_not_in_the_bundled_binaries() {
         "the maintenance tool is back in the bundled binary directory"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The icon embedded in the executable.
+//
+// These exist because of a real failure that produced no error anywhere. The logo
+// was replaced and the icon set regenerated, and every subsequent build still
+// embedded the *earlier* artwork: `tauri-build` compiles the icons into a Windows
+// resource, cargo cached the build script's result, and nothing declared an icon
+// as an input. The app built, installed, and ran with the wrong icon in the title
+// bar, taskbar, Desktop shortcut, Start Menu, and installer.
+//
+// It was found by extracting the embedded PNGs from the built executable and
+// comparing their pixel bounding boxes against `src-tauri/icons` - the executable
+// held a full-square dark image where the repository had a wide blue logo.
+//
+// A unit test cannot inspect a built binary, but it CAN assert the mechanism that
+// prevents the recurrence, plus the completeness of the icon set. That is what
+// follows.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn the_build_script_declares_the_icons_as_build_inputs() {
+    let build_rs = Path::new(env!("CARGO_MANIFEST_DIR")).join("build.rs");
+    let source = std::fs::read_to_string(&build_rs).expect("build.rs is readable");
+
+    assert!(
+        source.contains("cargo:rerun-if-changed=icons"),
+        "build.rs does not declare the icon directory as a build input. Replacing an \
+         icon would leave cargo's cached Windows resource in place, so the executable \
+         would keep the old artwork with no error reported anywhere."
+    );
+    assert!(
+        source.contains("cargo:rerun-if-changed=tauri.conf.json"),
+        "build.rs does not declare tauri.conf.json as a build input, so changing which \
+         icons the bundle references would not trigger a rebuild"
+    );
+    // The directory entry alone only covers the directory's own mtime, which does
+    // not change when a file inside it is edited, so per-file entries are needed.
+    assert!(
+        source.contains("read_dir"),
+        "build.rs declares the icon directory but not the files inside it; editing an \
+         existing icon would not change the directory's timestamp and the rebuild \
+         would be skipped"
+    );
+}
+
+#[test]
+fn the_icon_set_covers_every_size_windows_asks_for() {
+    // Windows requests specific sizes: 16 px in the title bar, 32 px in the taskbar
+    // and Alt-Tab, 48 px in Explorer's medium view, 256 px for large thumbnails and
+    // the installer. A set missing any of them is scaled up from a smaller image
+    // and looks soft exactly where a user notices.
+    let icons = Path::new(env!("CARGO_MANIFEST_DIR")).join("icons");
+    let ico_path = icons.join("icon.ico");
+    assert!(ico_path.exists(), "icon.ico is missing");
+
+    let bytes = std::fs::read(&ico_path).expect("icon.ico is readable");
+    assert!(bytes.len() > 1024, "icon.ico is implausibly small");
+    // Every Windows .ico opens with a 6-byte header: reserved(2), type(2), count(2).
+    assert_eq!(&bytes[0..2], &[0, 0], "icon.ico is not an icon (bad reserved field)");
+    assert_eq!(&bytes[2..4], &[1, 0], "icon.ico is a cursor, not an icon");
+    let image_count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
+    assert!(
+        image_count >= 5,
+        "icon.ico holds only {image_count} sizes; Windows needs a multi-resolution icon"
+    );
+
+    // The PNG sizes the bundle names in tauri.conf.json must exist too.
+    for name in ["32x32.png", "128x128.png", "128x128@2x.png"] {
+        let path = icons.join(name);
+        assert!(path.exists(), "{name} is missing from the icon set");
+        let head = std::fs::read(&path).expect("icon is readable");
+        assert_eq!(
+            &head[0..8],
+            &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A],
+            "{name} is not a PNG"
+        );
+    }
+}
+
+#[test]
+fn the_bundle_references_an_installer_icon_and_the_window_icon_set() {
+    // A configured installer icon that does not exist, or a window icon list that
+    // omits the .ico, means Windows falls back to a generic icon on the shortcut
+    // and in Add/Remove Programs.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let config = std::fs::read_to_string(root.join("tauri.conf.json"))
+        .expect("tauri.conf.json is readable");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&config).expect("tauri.conf.json is valid JSON");
+
+    let bundle_icons = parsed["bundle"]["icon"]
+        .as_array()
+        .expect("bundle.icon is an array");
+    assert!(
+        bundle_icons
+            .iter()
+            .any(|v| v.as_str().is_some_and(|s| s.ends_with(".ico"))),
+        "bundle.icon does not include an .ico, so Windows has no multi-size icon"
+    );
+    for icon in bundle_icons {
+        let relative = icon.as_str().expect("icon entries are strings");
+        assert!(
+            root.join(relative).exists(),
+            "bundle.icon names {relative}, which does not exist"
+        );
+    }
+
+    let installer_icon = parsed["bundle"]["windows"]["nsis"]["installerIcon"]
+        .as_str()
+        .expect("nsis.installerIcon is set");
+    assert!(
+        root.join(installer_icon).exists(),
+        "nsis.installerIcon names {installer_icon}, which does not exist"
+    );
+}
