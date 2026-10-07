@@ -108,7 +108,12 @@ impl ProbeResult {
         }
     }
 
-    fn with_detail(mut self, detail: impl Into<String>) -> Self {
+    /// Attach an explanatory detail, redacted before it is stored.
+    ///
+    /// Public so a caller that already holds a result can add context to it —
+    /// notably the compatibility pipeline, which appends which protocol a
+    /// provider does serve when the required one is missing.
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
         let text = detail.into();
         let redacted = crate::diagnostics::redact_text(&text);
         // Do not carry an empty detail; it renders as a blank line in the UI.
@@ -186,16 +191,32 @@ impl ProbeTarget {
     /// Only a genuine version segment (`v1`, `v2`, …) is collapsed, so a custom
     /// gateway prefix such as `https://host/api/openai` is preserved intact.
     pub fn url(&self, path: &str) -> String {
-        let base = self.base_url.trim_end_matches('/');
-        let path = path.trim_start_matches('/');
-        let Some((head, tail)) = path.split_once('/') else {
-            return format!("{base}/{path}");
-        };
-
-        if is_version_segment(head) && base_ends_with_segment(base, head) {
-            return format!("{base}/{tail}");
+        // Delegates to the shared resolver so a compatibility test and the
+        // configuration activation writes are derived by the same code. A probe
+        // that tested a different endpoint than activation uses would report a
+        // verdict about a URL the agent never contacts.
+        if let Some(protocol) = protocol_for_path(path) {
+            if let Ok(resolved) = crate::profiles::resolve_endpoint(&self.base_url, protocol) {
+                return resolved;
+            }
         }
-        format!("{base}/{path}")
+        // Every other path — the model list, for instance — still lives under the
+        // provider's version prefix, so it goes through the same collapsing rule
+        // rather than a plain join. A plain join is what produced
+        // `/v1/v1/models` for a provider configured with a `/v1` base.
+        if let Ok(resolved) =
+            crate::profiles::endpoint::resolve_auxiliary_path(&self.base_url, path)
+        {
+            return resolved;
+        }
+        // Only reachable when the stored base URL is not a URL at all, in which
+        // case the request should still be attempted so the failure is real
+        // rather than a panic.
+        format!(
+            "{}/{}",
+            self.base_url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        )
     }
 
     /// The client used for every probe.
@@ -383,38 +404,28 @@ fn extract_message(body: &str) -> String {
     truncate(body, 300)
 }
 
-/// Whether a URL path segment is an API version marker such as `v1` or `v2`.
+/// The API protocol a probe path belongs to, if it is one of the known routes.
 ///
-/// Deliberately narrow: only `v` followed by digits. A gateway path such as
-/// `api`, `openai`, or `anthropic` is a tenant prefix that must never be
-/// collapsed, because dropping it would send requests to the wrong place.
-fn is_version_segment(segment: &str) -> bool {
-    let mut chars = segment.chars();
-    matches!(chars.next(), Some('v') | Some('V'))
-        && chars.clone().next().is_some()
-        && chars.all(|c| c.is_ascii_digit())
-}
-
-/// Whether the base URL's path ends with `segment` as a whole path segment.
-///
-/// Segment-aware rather than a plain `ends_with`, so a host or prefix that merely
-/// ends in the same characters — `https://v1.example.com` or
-/// `https://host/myv1` — is not mistaken for a versioned base.
-fn base_ends_with_segment(base: &str, segment: &str) -> bool {
-    // Compare against the path only, so the host cannot contribute a match.
-    let path = match base.split_once("://") {
-        Some((_, rest)) => match rest.find('/') {
-            Some(index) => &rest[index..],
-            None => "",
-        },
-        None => base,
-    };
-    let path = path.trim_end_matches('/');
-    match path.rsplit_once('/') {
-        Some((_, last)) => last.eq_ignore_ascii_case(segment),
-        None => false,
+/// Returning `None` for anything else keeps this usable for the incidental paths
+/// a probe might request, such as a model list, which are joined plainly because
+/// they are not one of the three versioned API routes.
+fn protocol_for_path(path: &str) -> Option<crate::profiles::ApiProtocol> {
+    let normalised = path.trim_start_matches('/').to_ascii_lowercase();
+    match normalised.as_str() {
+        "responses" | "v1/responses" => Some(crate::profiles::ApiProtocol::OpenAiResponses),
+        "v1/chat/completions" | "chat/completions" => {
+            Some(crate::profiles::ApiProtocol::OpenAiChatCompletions)
+        }
+        "v1/messages" | "messages" => Some(crate::profiles::ApiProtocol::AnthropicMessages),
+        _ => None,
     }
 }
+
+/* `is_version_segment` and `base_ends_with_segment` used to live here. They were
+ * the local URL-joining rules, and they have been replaced by the shared
+ * resolver in `crate::profiles::endpoint` so that probing and activation cannot
+ * disagree about which endpoint a provider uses. The resolver's own tests cover
+ * the same cases against parsed URLs rather than substrings. */
 
 /// Run a request, converting transport failures into outcomes.
 async fn execute(
@@ -511,15 +522,47 @@ pub async fn probe_reachability(target: &ProbeTarget) -> ProbeResult {
 
 /// Step 3: is the credential accepted?
 ///
-/// Sends an intentionally-trivial request. `401`/`403` means the key is the
-/// problem; anything else means the key got past authentication.
-pub async fn probe_authentication(target: &ProbeTarget) -> ProbeResult {
-    let body = json!({
-        "model": target.model,
-        "max_tokens": 1,
-        "messages": [{ "role": "user", "content": "hi" }]
-    });
-    let request = match target.post("/v1/messages", body) {
+/// Sends an intentionally-trivial request **on the route the agent under test
+/// actually uses**. `401`/`403` means the key is the problem; a `404` means the
+/// provider does not serve that route at all, which is a protocol mismatch and
+/// not an authentication one.
+///
+/// This used to hardcode `/v1/messages`, which meant testing Codex sent an
+/// Anthropic-shaped request, and testing Claude Code against an OpenAI-shaped
+/// provider produced `404 Route POST /v1/messages not found` that the caller
+/// reported as an authentication failure. The user whose provider this happened
+/// to was told their key was wrong when the real answer was that their gateway
+/// speaks a different API.
+pub async fn probe_authentication_for(target: &ProbeTarget, protocol: Protocol) -> ProbeResult {
+    let (path, body) = match protocol {
+        Protocol::AnthropicMessages => (
+            Protocol::AnthropicMessages.probe_path(),
+            json!({
+                "model": target.model,
+                "max_tokens": 1,
+                "messages": [{ "role": "user", "content": "hi" }]
+            }),
+        ),
+        Protocol::OpenAiResponses => (
+            Protocol::OpenAiResponses.probe_path(),
+            json!({
+                "model": target.model,
+                "input": "hi",
+                "max_output_tokens": 1,
+                "stream": false
+            }),
+        ),
+        Protocol::OpenAiChatCompletions => (
+            Protocol::OpenAiChatCompletions.probe_path(),
+            json!({
+                "model": target.model,
+                "max_tokens": 1,
+                "messages": [{ "role": "user", "content": "hi" }]
+            }),
+        ),
+    };
+
+    let request = match target.post(path, body) {
         Ok(request) => request,
         Err(err) => {
             return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
@@ -540,12 +583,30 @@ pub async fn probe_authentication(target: &ProbeTarget) -> ProbeResult {
             );
             if outcome == ProbeOutcome::Supported {
                 result
+            } else if outcome == ProbeOutcome::Unsupported {
+                // A missing route is not a rejected credential. Say so, because
+                // the caller's step is labelled "Authentication" and a bare 404
+                // reads like a key problem.
+                result.with_detail(format!(
+                    "{} {} does not exist on this provider. This is a protocol mismatch, not a credential problem.",
+                    status.as_u16(),
+                    protocol.route()
+                ))
             } else {
                 result.with_detail(format!("{} {}", status.as_u16(), error_detail(&body)))
             }
         }
         Err(result) => result,
     }
+}
+
+/// Step 3 for a caller that does not yet know which protocol applies.
+///
+/// Defaults to the Anthropic route, which is what every existing caller of the
+/// unqualified probe meant. New code should prefer
+/// [`probe_authentication_for`] so the route matches the agent under test.
+pub async fn probe_authentication(target: &ProbeTarget) -> ProbeResult {
+    probe_authentication_for(target, Protocol::AnthropicMessages).await
 }
 
 // ---------------------------------------------------------------------------
@@ -1679,32 +1740,30 @@ mod tests {
     }
 
     #[test]
-    fn version_detection_is_exact() {
-        assert!(is_version_segment("v1"));
-        assert!(is_version_segment("v2"));
-        assert!(is_version_segment("V1"));
-        assert!(is_version_segment("v10"));
-        // Not version markers: a bare `v`, a word, or a mixed token.
-        assert!(!is_version_segment("v"));
-        assert!(!is_version_segment("api"));
-        assert!(!is_version_segment("v1beta"));
-        assert!(!is_version_segment("openai"));
-        assert!(!is_version_segment(""));
+    fn a_non_version_path_prefix_is_not_treated_as_a_version() {
+        // These used to test the local helpers directly. They go through the
+        // public `url` method now, because that is what a probe actually calls and
+        // the resolver behind it is shared with activation.
+        for base in ["https://h/v1beta", "https://h/myv1", "https://h/v"] {
+            let resolved = target_for(base).url("/v1/messages");
+            assert!(
+                resolved.starts_with(base),
+                "{base} lost its path: {resolved}"
+            );
+            assert_eq!(resolved.matches("/v1/").count(), 1, "{resolved}");
+        }
     }
 
     #[test]
-    fn base_segment_matching_is_segment_aware() {
-        assert!(base_ends_with_segment("https://h/v1", "v1"));
-        assert!(base_ends_with_segment("https://h/v1/", "v1"));
-        assert!(base_ends_with_segment("https://h/api/v1", "v1"));
-        assert!(base_ends_with_segment("https://h/V1", "v1"));
-        // Substring but not a whole segment.
-        assert!(!base_ends_with_segment("https://h/myv1", "v1"));
-        assert!(!base_ends_with_segment("https://h/v1beta", "v1"));
-        // The host alone must not match.
-        assert!(!base_ends_with_segment("https://v1.example.com", "v1"));
-        // No path at all.
-        assert!(!base_ends_with_segment("https://h", "v1"));
+    fn a_version_like_host_is_not_treated_as_a_versioned_base() {
+        assert_eq!(
+            target_for("https://v1.example.com").url("/v1/messages"),
+            "https://v1.example.com/v1/messages"
+        );
+        assert_eq!(
+            target_for("https://v1.example.com").url("/responses"),
+            "https://v1.example.com/v1/responses"
+        );
     }
 
     #[test]

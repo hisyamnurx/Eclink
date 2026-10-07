@@ -32,7 +32,8 @@ import {
   type ProviderTemplate,
   type TestOutcome,
 } from "../lib/api";
-import { allowsActivation, compatibilityLabel, relativeTime } from "../lib/format";
+import { activationGate } from "../lib/compatibility";
+import { relativeTime } from "../lib/format";
 import { copyToClipboard } from "../lib/opener";
 import { useAction, useApp } from "../state/AppContext";
 import { TestResults } from "./TestResults";
@@ -296,41 +297,60 @@ function ProfileRow({
   const [outcome, setOutcome] = useState<TestOutcome | null>(null);
 
   const record = profile.compatibility?.[agent];
-  const status = record?.status;
-  const canActivate = allowsActivation(status) && profile.hasSecret;
+  // Both the badge and the Activate button come from this one value, so they
+  // cannot disagree. See src/lib/compatibility.ts for why that matters.
+  const gate = activationGate(profile, agents, agent);
   const agentSummary = agents.find((item) => item.agent === agent);
-  const isActive =
-    agentSummary?.activeKind === "managed" && agentSummary.activeProfileName === profile.name;
+  const isActive = gate.isActive;
 
+  /**
+   * Run a test and then immediately re-read profiles.
+   *
+   * The `await onChanged()` is the fix for a real bug, and the ordering is the
+   * whole point. The badge above reads `profile.compatibility`, which comes from
+   * the `profiles` array in context — not from the test result. Writing the result
+   * to local state therefore updated the panel and the badge disagreed, so a run
+   * that reported 7/7 still showed "Not tested" and left Activate disabled until
+   * something unrelated happened to reload profiles, which is why the badge
+   * appeared to correct itself a few seconds later.
+   *
+   * Reloading is awaited rather than fired and forgotten, so Activate becomes
+   * usable in the same commit that renders the result. There is no window in
+   * which the panel says Compatible and the button is still disabled.
+   */
   const runTest = () =>
-    void testAction.run(
-      async () => {
-        const result = await call("test_profile_connection", {
-          id: profile.id,
-          agent,
-        });
-        setOutcome(result);
-        return result;
-      },
-      {
-        onError: (api) => {
-          // A failed test is a normal outcome with its own report, not a toast:
-          // the user needs to read which step failed.
-          setOutcome({
-            profileId: profile.id,
+    void testAction
+      .run(
+        async () => {
+          const result = await call("test_profile_connection", {
+            id: profile.id,
             agent,
-            status: "test_failed",
-            reasonCode: api.kind,
-            reason: api.message,
-            warning: api.hint,
-            steps: [],
-            streaming: false,
-            toolCalling: false,
           });
-          return true;
+          setOutcome(result);
+          return result;
         },
-      },
-    );
+        {
+          onError: (api) => {
+            // A failed test is a normal outcome with its own report, not a toast:
+            // the user needs to read which step failed.
+            setOutcome({
+              profileId: profile.id,
+              agent,
+              status: "test_failed",
+              reasonCode: api.kind,
+              reason: api.message,
+              warning: api.hint,
+              steps: [],
+              streaming: false,
+              toolCalling: false,
+            });
+            return true;
+          },
+        },
+      )
+      // Runs on both the success and the reported-failure paths, because a failed
+      // test also writes a compatibility record that the badge must reflect.
+      .then(onChanged);
 
   const activate = () =>
     void activateAction
@@ -348,8 +368,8 @@ function ProfileRow({
       <div className="list-row__main">
         <div className="list-row__title">
           {profile.name}
-          <Badge tone={statusTone(status)} dot>
-            {compatibilityLabel(status)}
+          <Badge tone={statusTone(record?.status)} dot>
+            {gate.label}
           </Badge>
           {isActive && <Badge tone="info">Active</Badge>}
           {!profile.hasSecret && <Badge tone="bad">No API key</Badge>}
@@ -383,14 +403,10 @@ function ProfileRow({
           variant="primary"
           onClick={activate}
           busy={activateAction.busy}
-          disabled={!canActivate || isActive}
-          title={
-            !profile.hasSecret
-              ? "Add an API key before activating."
-              : !allowsActivation(status)
-                ? "Test this provider against the agent first."
-                : undefined
-          }
+          disabled={!gate.canActivate || isActive}
+          // Comes from the same gate the badge uses, so the tooltip cannot claim
+          // the provider needs testing while the badge already says Compatible.
+          title={gate.blockedReason}
         >
           {isActive ? "Active" : "Activate"}
         </Button>

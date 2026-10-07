@@ -21,7 +21,8 @@ import {
   type StatusTone,
 } from "../components/ui";
 import { ApiError, call, type AgentId, type AgentSummary } from "../lib/api";
-import { compatibilityLabel, relativeTime } from "../lib/format";
+import { compatibilityLabel } from "../lib/compatibility";
+import { relativeTime } from "../lib/format";
 import { openUrl, pickFolder } from "../lib/opener";
 import { useAction, useApp } from "../state/AppContext";
 

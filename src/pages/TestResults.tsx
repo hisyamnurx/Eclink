@@ -9,7 +9,8 @@
 
 import { Badge, Button, type StatusTone } from "../components/ui";
 import { copyToClipboard } from "../lib/opener";
-import { compatibilityLabel, latency } from "../lib/format";
+import { compatibilityLabel } from "../lib/compatibility";
+import { latency } from "../lib/format";
 import { useApp } from "../state/AppContext";
 import type { TestOutcome, TestStep, TestStepState } from "../lib/api";
 

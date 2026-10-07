@@ -64,37 +64,12 @@ export function bytes(count: number): string {
   return `${(count / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-/** A short, human status word for a compatibility status. */
-export function compatibilityLabel(status: string | undefined): string {
-  switch (status) {
-    case "compatible":
-      return "Compatible";
-    case "partially_compatible":
-      return "Partially compatible";
-    case "incompatible":
-      return "Incompatible";
-    case "unknown":
-      return "Not determined";
-    case "test_failed":
-      return "Test failed";
-    case "testing":
-      return "Testing…";
-    case "untested":
-      return "Not tested";
-    default:
-      return "Not tested";
-  }
-}
-
-/**
- * Whether activation is permitted for a status.
+/* `compatibilityLabel` and `allowsActivation` moved to ./compatibility.
  *
- * Mirrors `CompatibilityStatus::allows_activation` on the backend; kept in sync
- * deliberately so the button state matches what the command will actually allow.
- */
-export function allowsActivation(status: string | undefined): boolean {
-  return status === "compatible" || status === "partially_compatible";
-}
+ * They were defined here and separately re-derived in the profile row, which is
+ * precisely how the badge and the Activate button came to disagree after a
+ * successful test. One definition now, in the module that also computes the row's
+ * gate, so the two cannot drift apart again. */
 
 /** Truncate long text for a single-line display. */
 export function truncate(text: string, max = 60): string {

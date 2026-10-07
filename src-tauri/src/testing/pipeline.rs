@@ -274,19 +274,34 @@ pub async fn test_profile(
     }
 
     // ---- 3. Authentication ---------------------------------------------
-    let auth = probes::probe_authentication(&target).await;
+    //
+    // Asked on the route the agent under test actually uses. A 404 here means the
+    // provider does not serve that route, which is a protocol mismatch rather
+    // than a credential problem, so it must not abort the pipeline with an
+    // "Authentication Failed" verdict. The protocol step below reports it
+    // properly, naming which API the provider does serve.
+    let required_protocol = if codex {
+        probes::Protocol::OpenAiResponses
+    } else {
+        probes::Protocol::AnthropicMessages
+    };
+    let auth = probes::probe_authentication_for(&target, required_protocol).await;
     let auth_ok = auth.outcome == ProbeOutcome::Supported;
+    let auth_is_route_mismatch = auth.outcome == ProbeOutcome::Unsupported;
     steps.push(TestStep::new(
         "authentication",
         "Authentication",
         if auth_ok {
             TestStepState::Passed
+        } else if auth_is_route_mismatch {
+            // Not a failure of the credential, and not a pass either.
+            TestStepState::Warning
         } else {
             TestStepState::Failed
         },
         &auth,
     ));
-    if !auth_ok {
+    if !auth_ok && !auth_is_route_mismatch {
         return Ok(finish(
             profile,
             agent,
@@ -296,6 +311,38 @@ pub async fn test_profile(
             false,
             false,
             None,
+        ));
+    }
+    if auth_is_route_mismatch {
+        // The credential step could not be evaluated because the route is absent.
+        // Everything after this depends on the required protocol, so the protocol
+        // step is where the real answer is, and the rest is skipped with a reason
+        // rather than reported as three more failures.
+        let protocol = if codex {
+            probes::probe_codex_protocol(&target).await
+        } else {
+            probes::probe_claude_protocol(&target).await
+        }
+        .with_detail(protocol_mismatch_note(&target, required_protocol).await);
+        steps.push(TestStep::new(
+            "protocol",
+            "Agent Protocol",
+            TestStepState::Failed,
+            &protocol,
+        ));
+        let because = format!("this provider does not serve {}", required_protocol.route());
+        steps.push(TestStep::skipped("model", "Model Availability", &because));
+        steps.push(TestStep::skipped("streaming", "Streaming", &because));
+        steps.push(TestStep::skipped("tools", "Tool Calling", &because));
+        return Ok(finish(
+            profile,
+            agent,
+            steps,
+            ProbeOutcome::Unsupported,
+            None,
+            false,
+            false,
+            Some(&protocol),
         ));
     }
 
@@ -345,12 +392,31 @@ pub async fn test_profile(
     }
 
     // ---- 5. Agent protocol ---------------------------------------------
+    //
+    // Each agent requires a specific API and there is no translation layer, so
+    // this step asks for the route that agent will actually use. The endpoint
+    // comes from the shared resolver, which means the URL tested here is by
+    // construction the URL activation writes.
+    //
+    // When the required route is absent, the report says which protocol is
+    // required and which ones the provider does offer instead — a bare "not
+    // found" leaves the user guessing whether the problem is their key.
+    let required = if codex {
+        probes::Protocol::OpenAiResponses
+    } else {
+        probes::Protocol::AnthropicMessages
+    };
     let protocol = if codex {
         probes::probe_codex_protocol(&target).await
     } else {
         probes::probe_claude_protocol(&target).await
     };
     let protocol_ok = protocol.outcome == ProbeOutcome::Supported;
+    let protocol = if protocol_ok {
+        protocol
+    } else {
+        protocol.with_detail(protocol_mismatch_note(&target, required).await)
+    };
     steps.push(TestStep::new(
         "protocol",
         "Agent Protocol",
@@ -483,6 +549,65 @@ fn verdict(
             ),
         ),
     }
+}
+
+/// Explain which protocol is required and, when possible, which the provider
+/// actually serves.
+///
+/// This turns "the endpoint does not serve this API route" into something
+/// actionable. The user's real report was `404 Route POST:/v1/messages not
+/// found`, which on its own reads like a broken endpoint; what it actually meant
+/// was that their provider speaks the OpenAI shape and Claude Code cannot use it.
+///
+/// The extra probes only run on the failure path, so a working provider never
+/// pays for them.
+async fn protocol_mismatch_note(
+    target: &probes::ProbeTarget,
+    required: probes::Protocol,
+) -> String {
+    let mut note = format!(
+        "This provider does not serve {} ({}), which {} requires.",
+        required.label(),
+        required.route(),
+        required
+            .required_by()
+            .map(|agent| agent.display_name())
+            .unwrap_or("this agent")
+    );
+
+    // Ask for the other shapes so the message can name what *is* available.
+    let mut available: Vec<&str> = Vec::new();
+    for other in probes::Protocol::ALL {
+        if other == required {
+            continue;
+        }
+        let supported = match other {
+            probes::Protocol::OpenAiResponses => probes::probe_codex_protocol(target).await.outcome,
+            probes::Protocol::OpenAiChatCompletions => {
+                probes::probe_chat_completions(target).await.outcome
+            }
+            probes::Protocol::AnthropicMessages => {
+                probes::probe_claude_protocol(target).await.outcome
+            }
+        };
+        if supported == ProbeOutcome::Supported {
+            available.push(other.label());
+        }
+    }
+
+    if available.is_empty() {
+        note.push_str(" No other known API route answered either.");
+    } else {
+        note.push_str(&format!(
+            " This provider serves {} instead. Eclyzer Bridge does not translate between APIs, so this provider cannot be used with {}.",
+            available.join(" and "),
+            required
+                .required_by()
+                .map(|agent| agent.display_name())
+                .unwrap_or("this agent")
+        ));
+    }
+    note
 }
 
 /// Assemble an outcome for a pipeline that stopped early.

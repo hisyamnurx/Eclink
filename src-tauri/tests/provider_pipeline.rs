@@ -164,17 +164,52 @@ fn handle(stream: TcpStream, routes: &[Route], recorded: &Arc<Mutex<Vec<Recorded
         method,
         path: path.clone(),
         headers,
-        body,
+        body: body.clone(),
     });
 
-    // First matching route wins; "matcher" is a substring test on the path.
+    // First matching route wins. Three match kinds are supported, because a
+    // single path is requested by several different probes with different bodies:
+    //
+    //   * `path`          - any request to exactly this path
+    //   * `path?stream`   - a request whose JSON body has `"stream": true`
+    //   * `path?tools`    - a request whose JSON body carries a `tools` array
+    //
+    // Without this, one path could only ever return one body, so a mock could not
+    // both answer the protocol probe with JSON and the streaming probe with SSE.
     let response = routes
         .iter()
-        .find(|(matcher, _)| path.contains(matcher.as_str()))
+        .find(|(matcher, _)| route_matches(matcher, &path, &body))
         .map(|(_, response)| response.clone())
         .unwrap_or_else(|| Response::json(404, r#"{"error":{"message":"no route"}}"#));
 
     write_response(stream, &response);
+}
+
+/// Whether a route matcher applies to this request.
+///
+/// Matchers are ordered, so a test registers the most specific one first.
+fn route_matches(matcher: &str, path: &str, body: &str) -> bool {
+    let (route, qualifier) = match matcher.split_once('?') {
+        Some((route, qualifier)) => (route, Some(qualifier)),
+        None => (matcher, None),
+    };
+    if !path.contains(route) {
+        return false;
+    }
+    match qualifier {
+        None => true,
+        Some("stream") => serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|value| value.get("stream").and_then(|v| v.as_bool()))
+            .unwrap_or(false),
+        Some("tools") => serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .map(|value| value.get("tools").is_some())
+            .unwrap_or(false),
+        // An unknown qualifier never matches, so a typo fails loudly instead of
+        // silently behaving like an unqualified route.
+        Some(_) => false,
+    }
 }
 
 /// Write a minimal, correct HTTP/1.1 response and close the connection.
@@ -237,6 +272,51 @@ const OK_RESPONSES: &str = r#"{"id":"resp_1","object":"response","status":"compl
 /// A successful Anthropic-shaped message.
 const OK_MESSAGES: &str = r#"{"id":"msg_1","type":"message","role":"assistant",
 "content":[{"type":"text","text":"ready"}],"usage":{"input_tokens":5,"output_tokens":1}}"#;
+
+/// A model list naming the model the pipeline asks about.
+///
+/// The model step looks the model up by id, so a list that omits it would fail
+/// that step and mask what the test is actually checking.
+const MODELS_OK: &str = r#"{"data":[{"id":"test-model","object":"model"},{"id":"m","object":"model"},{"id":"example-model","object":"model"},{"id":"vendor_a/example-model","object":"model"},{"id":"dual-model","object":"model"}]}"#;
+
+/// An Anthropic-shaped stream carrying a tool call.
+///
+/// The streaming step requires SSE, and the tool step requires a tool invocation
+/// to appear. Serving both from one body lets the full 7-step pipeline reach
+/// Compatible, which is what the real working provider did.
+const SSE_MESSAGES_TOOL: &str = concat!(
+    "event: message_start\n",
+    "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_1\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\n",
+    "event: content_block_start\n",
+    "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"get_weather\",\"input\":{}}}\n\n",
+    "event: content_block_delta\n",
+    "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\":\\\"Jakarta\\\"}\"}}\n\n",
+    "event: message_delta\n",
+    "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\"},\"usage\":{\"output_tokens\":12}}\n\n",
+    "event: message_stop\n",
+    "data: {\"type\":\"message_stop\"}\n\n",
+);
+
+/// A Responses-shaped stream carrying a function call.
+const SSE_RESPONSES_TOOL: &str = concat!(
+    "event: response.created\n",
+    "data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\"}}\n\n",
+    "event: response.output_item.added\n",
+    "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"name\":\"get_weather\",\"arguments\":\"\"}}\n\n",
+    "event: response.function_call_arguments.delta\n",
+    "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"delta\":\"{\\\"city\\\":\\\"Jakarta\\\"}\"}\n\n",
+    "event: response.completed\n",
+    "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\"}}\n\n",
+);
+
+/// An Anthropic-shaped non-streaming reply that calls the tool.
+const MESSAGES_TOOL_CALL: &str = r#"{"id":"msg_1","type":"message","role":"assistant",
+"content":[{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{"city":"Jakarta"}}],
+"stop_reason":"tool_use","usage":{"input_tokens":5,"output_tokens":12}}"#;
+
+/// A Responses-shaped non-streaming reply that calls the tool.
+const RESPONSES_TOOL_CALL: &str = r#"{"id":"resp_1","object":"response","status":"completed",
+"output":[{"type":"function_call","id":"fc_1","name":"get_weather","arguments":"{\"city\":\"Jakarta\"}"}]}"#;
 
 // ---------------------------------------------------------------------------
 // Reachability
@@ -785,19 +865,20 @@ use eclyzer_bridge_lib::testing::probes::{probe_protocols, Protocol};
 
 /// A server that answers one route and 404s the rest.
 ///
-/// The paths here mirror what each probe actually sends, which was verified
-/// against Codex's own source rather than assumed:
+/// The paths here are the **resolved endpoints** the probes actually request,
+/// which was verified against Codex's own source rather than assumed:
 ///
-/// * Codex builds its request from `url_for_path("/responses")`, and its default
-///   base URL is `https://api.openai.com/v1` — so a provider configured with a
-///   `/v1` base is reached at `/v1/responses`, and a bare host at `/responses`.
+/// * Codex builds its request from `url_for_path("/responses")` and its default
+///   base URL is `https://api.openai.com/v1`, so the effective route is
+///   `/v1/responses`. The probe goes through the same resolver activation uses,
+///   so it requests exactly that.
 /// * `wire_api = "chat"` is no longer supported by Codex at all; its source
 ///   rejects the value with an explicit error. Chat Completions is therefore
 ///   probed only to tell a Chat-only gateway apart from a broken one, never as a
 ///   way to serve Codex.
 fn single_protocol_server(route: &str, body: &str) -> MockServer {
     let routes = [
-        ("/responses", OK_RESPONSES),
+        ("/v1/responses", OK_RESPONSES),
         ("/v1/chat/completions", OK_CHAT),
         ("/v1/messages", OK_MESSAGES),
     ]
@@ -903,10 +984,45 @@ async fn every_protocol_is_probed_even_when_the_first_one_fails() {
     let _ = probe_protocols(&target(&server, AuthMode::XApiKey)).await;
 
     let routes: Vec<String> = server.requests().iter().map(|r| r.path.clone()).collect();
-    for route in ["/responses", "/v1/chat/completions", "/v1/messages"] {
+    // The resolved endpoints, not the raw protocol paths: the probe goes through
+    // the shared resolver, so a bare host gets `/v1/responses` and the request
+    // actually reaches the documented route.
+    for route in ["/v1/responses", "/v1/chat/completions", "/v1/messages"] {
         assert!(
             routes.iter().any(|r| r == route),
             "{route} was never probed; saw {routes:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_probe_requests_the_resolved_endpoint_not_a_repeated_version() {
+    // The defect that reached a user: a base URL ending in /v1 produced
+    // /v1/v1/messages and their provider answered 404. The probe must send the
+    // endpoint the resolver computes, which is also the one activation uses.
+    let server = single_protocol_server("/v1/messages", OK_MESSAGES);
+    let server_url = server.base_url.clone();
+    let target = ProbeTarget::new(
+        &format!("{server_url}/v1"),
+        "test-model",
+        Secret::new("sk-test"),
+        AuthMode::XApiKey,
+        Some(10_000),
+    )
+    .expect("target");
+
+    let caps = probe_protocols(&target).await;
+    assert!(caps.supports(Protocol::AnthropicMessages));
+
+    let routes: Vec<String> = server.requests().iter().map(|r| r.path.clone()).collect();
+    assert!(
+        !routes.iter().any(|p| p.contains("/v1/v1/")),
+        "a duplicated version was requested: {routes:?}"
+    );
+    for route in ["/v1/responses", "/v1/chat/completions", "/v1/messages"] {
+        assert!(
+            routes.iter().any(|r| r == route),
+            "{route} missing; saw {routes:?}"
         );
     }
 }
@@ -953,6 +1069,65 @@ async fn a_one_hundred_percent_unreachable_endpoint_reports_nothing_supported() 
 }
 
 #[tokio::test]
+async fn the_authentication_step_uses_the_route_the_agent_requires() {
+    // The root cause of the reported EIAI failure: the authentication step always
+    // sent an Anthropic-shaped request, so testing Codex asked the wrong route,
+    // and testing Claude Code against an OpenAI-shaped provider produced a 404
+    // that was reported as an authentication failure.
+    use eclyzer_bridge_lib::testing::probes::{probe_authentication_for, Protocol};
+
+    // A server that answers only the Responses route.
+    let server = MockServer::start(vec![
+        ("/v1/responses".into(), Response::json(200, OK_RESPONSES)),
+        (
+            "/v1/messages".into(),
+            Response::json(404, r#"{"error":"Route POST /v1/messages not found"}"#),
+        ),
+    ]);
+
+    // Codex: the credential is accepted, because the route it needs works.
+    let codex = probe_authentication_for(
+        &target(&server, AuthMode::Bearer),
+        Protocol::OpenAiResponses,
+    )
+    .await;
+    assert_eq!(codex.outcome, ProbeOutcome::Supported);
+
+    // Claude Code against the same provider: the route is missing, which must be
+    // Unsupported rather than Unauthorized.
+    let claude = probe_authentication_for(
+        &target(&server, AuthMode::Bearer),
+        Protocol::AnthropicMessages,
+    )
+    .await;
+    assert_eq!(claude.outcome, ProbeOutcome::Unsupported);
+    assert_ne!(claude.outcome, ProbeOutcome::Unauthorized);
+    let detail = claude.detail.unwrap_or_default();
+    assert!(
+        detail.to_lowercase().contains("protocol mismatch"),
+        "the detail must not read like a credential problem: {detail}"
+    );
+    assert!(!detail.to_lowercase().contains("api key"), "{detail}");
+}
+
+#[tokio::test]
+async fn a_rejected_key_is_still_reported_as_rejected_on_the_right_route() {
+    // The fix must not swallow real authentication failures.
+    use eclyzer_bridge_lib::testing::probes::{probe_authentication_for, Protocol};
+
+    let server = MockServer::start(vec![(
+        "/v1/responses".into(),
+        Response::json(401, r#"{"error":{"message":"bad key"}}"#),
+    )]);
+    let result = probe_authentication_for(
+        &target(&server, AuthMode::Bearer),
+        Protocol::OpenAiResponses,
+    )
+    .await;
+    assert_eq!(result.outcome, ProbeOutcome::Unauthorized);
+}
+
+#[tokio::test]
 async fn protocol_probing_does_not_leak_the_key_into_the_capability_report() {
     // The report is shown in the UI and can be copied into a diagnostics bundle.
     let server = single_protocol_server("/v1/messages", OK_MESSAGES);
@@ -961,6 +1136,267 @@ async fn protocol_probing_does_not_leak_the_key_into_the_capability_report() {
     let serialised = serde_json::to_string(&caps).expect("the report serialises");
     assert!(!serialised.contains("sk-test-key"), "{serialised}");
     assert!(!serialised.contains("Authorization"), "{serialised}");
+}
+
+// ---------------------------------------------------------------------------
+// The full compatibility pipeline, for the two real providers.
+//
+// These are the cases from the report. They exercise the whole 7-step pipeline
+// against a local server, so the verdict, the step list, and the message the user
+// reads are all covered — not just the individual probe.
+// ---------------------------------------------------------------------------
+
+use eclyzer_bridge_lib::profiles::{AdvancedOptions, CompatibilityStatus, Profile};
+use eclyzer_bridge_lib::testing::pipeline::{test_profile, TestOutcome};
+
+/// A profile pointed at a local mock server.
+fn profile_for(base_url: &str, model: &str, agent: AgentId) -> Profile {
+    let mut p = Profile::new(
+        "test".to_string(),
+        "test".to_string(),
+        base_url.to_string(),
+        model.to_string(),
+        vec![agent],
+    );
+    p.advanced = AdvancedOptions {
+        auth_mode: AuthMode::XApiKey,
+        ..Default::default()
+    };
+    p
+}
+
+/// Every step's label and state, so a failure names exactly which step broke.
+fn step_states(outcome: &TestOutcome) -> Vec<(String, String)> {
+    outcome
+        .steps
+        .iter()
+        .map(|step| (step.label.clone(), format!("{:?}", step.state)))
+        .collect()
+}
+
+/// The detail attached to one step, or an empty string.
+fn step_detail(outcome: &TestOutcome, id: &str) -> String {
+    outcome
+        .steps
+        .iter()
+        .find(|s| s.id == id)
+        .and_then(|s| s.detail.clone())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn provider_a_shaped_provider_passes_every_claude_check() {
+    // The provider that already worked: Anthropic Messages plus streaming and a
+    // tool call. This is the regression guard for item 4 of the task, and it
+    // requires the full seven steps to pass so the verdict is Compatible.
+    //
+    // A route table that satisfies every step of the pipeline for Claude Code:
+    // a JSON reply for the protocol probe, an SSE stream for the streaming probe,
+    // and a tool call for the tool probe. The qualified matchers are what let one
+    // path answer three different probes.
+    let server = MockServer::start(vec![
+        (
+            "/v1/messages?stream".into(),
+            Response::sse(SSE_MESSAGES_TOOL),
+        ),
+        (
+            "/v1/messages?tools".into(),
+            Response::json(200, MESSAGES_TOOL_CALL),
+        ),
+        ("/v1/messages".into(), Response::json(200, OK_MESSAGES)),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+    let profile = profile_for(&server.base_url, "example-model", AgentId::Claude);
+
+    let outcome = test_profile(&profile, AgentId::Claude, Secret::new("sk-test"))
+        .await
+        .expect("the pipeline runs");
+
+    let states = step_states(&outcome);
+    assert_eq!(
+        outcome.status,
+        CompatibilityStatus::Compatible,
+        "steps were {states:?}"
+    );
+    assert_eq!(outcome.steps.len(), 7, "steps were {states:?}");
+    for (label, state) in &states {
+        assert_eq!(state, "Passed", "{label} was {state}");
+    }
+    assert!(outcome.streaming, "steps were {states:?}");
+    assert!(outcome.tool_calling, "steps were {states:?}");
+}
+
+#[tokio::test]
+async fn provider_b_shaped_provider_is_reported_as_the_wrong_protocol_for_claude() {
+    // The reported failure: a provider that serves the OpenAI shape and returns
+    // "Route POST /v1/messages not found" for the Anthropic route. The pipeline
+    // must not call this an authentication problem, and must say which protocol
+    // the provider does serve.
+    let server = MockServer::start(vec![
+        (
+            "/v1/messages".into(),
+            Response::json(404, r#"{"error":"Route POST /v1/messages not found"}"#),
+        ),
+        ("/v1/chat/completions".into(), Response::json(200, OK_CHAT)),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+    let profile = profile_for(
+        &server.base_url,
+        "vendor_a/example-model",
+        AgentId::Claude,
+    );
+
+    let outcome = test_profile(&profile, AgentId::Claude, Secret::new("sk-test"))
+        .await
+        .expect("the pipeline runs");
+
+    assert_ne!(
+        outcome.status,
+        CompatibilityStatus::Compatible,
+        "an OpenAI-only provider must never be Compatible for Claude Code"
+    );
+    // A missing route is a protocol problem, so it must not read like a rejected
+    // credential. `CompatibilityStatus` has no auth-specific variant, which is
+    // itself the point: the advice must come from the message, not a status name.
+    let reason_text = format!(
+        "{} {}",
+        outcome.reason_code.to_lowercase(),
+        outcome.reason.to_lowercase()
+    );
+    assert!(
+        !reason_text.contains("auth"),
+        "a missing route was reported as an authentication failure: {reason_text}"
+    );
+
+    // The protocol step may not exist if an earlier step already failed, so the
+    // detail is read from whichever step carried the explanation.
+    let detail = step_detail(&outcome, "protocol");
+    let all_steps: Vec<(String, String, Option<String>)> = outcome
+        .steps
+        .iter()
+        .map(|s| (s.id.clone(), format!("{:?}", s.state), s.detail.clone()))
+        .collect();
+    assert!(
+        detail.contains("Anthropic Messages"),
+        "protocol detail was {detail:?}; all steps: {all_steps:#?}"
+    );
+    assert!(detail.contains("/v1/messages"), "{detail}");
+    assert!(
+        detail.contains("OpenAI Chat Completions"),
+        "the note must name what the provider does serve: {detail}"
+    );
+    assert!(
+        detail.to_lowercase().contains("does not translate"),
+        "the note must say Bridge will not pretend: {detail}"
+    );
+    // And it must never read like a credential problem.
+    assert!(!detail.to_lowercase().contains("api key"), "{detail}");
+}
+
+#[tokio::test]
+async fn a_provider_serving_only_anthropic_is_not_claimed_for_codex() {
+    // The mirror case: Codex requires Responses, and an Anthropic-only provider
+    // must not be reported as usable by it.
+    let server = MockServer::start(vec![
+        ("/v1/messages".into(), Response::json(200, OK_MESSAGES)),
+        (
+            "/v1/responses".into(),
+            Response::json(404, r#"{"error":"not found"}"#),
+        ),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+    let profile = profile_for(&server.base_url, "m", AgentId::Codex);
+
+    let outcome = test_profile(&profile, AgentId::Codex, Secret::new("sk-test"))
+        .await
+        .expect("the pipeline runs");
+
+    assert_ne!(
+        outcome.status,
+        CompatibilityStatus::Compatible,
+        "an Anthropic-only provider must not be Compatible for Codex"
+    );
+    let protocol_step = outcome
+        .steps
+        .iter()
+        .find(|s| s.id == "protocol")
+        .expect("the protocol step ran");
+    let detail = protocol_step.detail.clone().unwrap_or_default();
+    assert!(detail.contains("OpenAI Responses"), "{detail}");
+    assert!(
+        detail.contains("Anthropic Messages"),
+        "the note must name what the provider serves: {detail}"
+    );
+}
+
+#[tokio::test]
+async fn a_provider_serving_both_protocols_is_compatible_for_both() {
+    let server = MockServer::start(vec![
+        (
+            "/v1/responses?stream".into(),
+            Response::sse(SSE_RESPONSES_TOOL),
+        ),
+        (
+            "/v1/responses?tools".into(),
+            Response::json(200, RESPONSES_TOOL_CALL),
+        ),
+        ("/v1/responses".into(), Response::json(200, OK_RESPONSES)),
+        (
+            "/v1/messages?stream".into(),
+            Response::sse(SSE_MESSAGES_TOOL),
+        ),
+        (
+            "/v1/messages?tools".into(),
+            Response::json(200, MESSAGES_TOOL_CALL),
+        ),
+        ("/v1/messages".into(), Response::json(200, OK_MESSAGES)),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+
+    for agent in [AgentId::Codex, AgentId::Claude] {
+        let profile = profile_for(&server.base_url, "dual-model", agent);
+        let outcome = test_profile(&profile, agent, Secret::new("sk-test"))
+            .await
+            .expect("the pipeline runs");
+        assert_eq!(
+            outcome.status,
+            CompatibilityStatus::Compatible,
+            "{agent:?} failed: {:?}",
+            step_states(&outcome)
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_pipeline_requests_the_resolved_route_for_each_agent() {
+    // The endpoint the test uses must be the endpoint activation writes. A base
+    // URL carrying /v1 is the case that broke, so it is the case tested.
+    let server = MockServer::start(vec![
+        ("/v1/responses".into(), Response::sse(SSE_RESPONSES_TOOL)),
+        ("/v1/messages".into(), Response::sse(SSE_MESSAGES_TOOL)),
+        ("/v1/models".into(), Response::json(200, MODELS_OK)),
+    ]);
+    let base = format!("{}/v1", server.base_url);
+
+    for agent in [AgentId::Codex, AgentId::Claude] {
+        let profile = profile_for(&base, "m", agent);
+        let _ = test_profile(&profile, agent, Secret::new("sk-test")).await;
+    }
+
+    let paths: Vec<String> = server.requests().iter().map(|r| r.path.clone()).collect();
+    assert!(
+        !paths.iter().any(|p| p.contains("/v1/v1/")),
+        "a duplicated version was requested: {paths:?}"
+    );
+    assert!(paths.iter().any(|p| p == "/v1/messages"), "{paths:?}");
+    assert!(paths.iter().any(|p| p == "/v1/responses"), "{paths:?}");
+    // The model list is not one of the three API routes, so it exercises the
+    // auxiliary resolver. It doubled the version in an earlier revision and was
+    // caught by this assertion rather than by inspection.
+    assert!(
+        paths.iter().any(|p| p == "/v1/models"),
+        "the model list was requested at the wrong path: {paths:?}"
+    );
 }
 
 #[tokio::test]

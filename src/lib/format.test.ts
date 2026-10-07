@@ -10,9 +10,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   absoluteTime,
-  allowsActivation,
   bytes,
-  compatibilityLabel,
   folderName,
   latency,
   relativeTime,
@@ -92,41 +90,10 @@ describe("bytes", () => {
   });
 });
 
-describe("compatibilityLabel", () => {
-  it("gives every status a human word", () => {
-    expect(compatibilityLabel("compatible")).toBe("Compatible");
-    expect(compatibilityLabel("partially_compatible")).toBe("Partially compatible");
-    expect(compatibilityLabel("incompatible")).toBe("Incompatible");
-    expect(compatibilityLabel("test_failed")).toBe("Test failed");
-    expect(compatibilityLabel("testing")).toBe("Testing…");
-  });
-
-  it("treats an unknown status as untested rather than as compatible", () => {
-    // Overstating here would let a user activate something never verified.
-    expect(compatibilityLabel(undefined)).toBe("Not tested");
-    expect(compatibilityLabel("something_new")).toBe("Not tested");
-  });
-});
-
-describe("allowsActivation", () => {
-  it("only permits activation for a status that passed a test", () => {
-    expect(allowsActivation("compatible")).toBe(true);
-    expect(allowsActivation("partially_compatible")).toBe(true);
-  });
-
-  it("refuses everything that was not verified", () => {
-    for (const status of [
-      "untested",
-      "testing",
-      "incompatible",
-      "unknown",
-      "test_failed",
-      undefined,
-    ]) {
-      expect(allowsActivation(status), `status ${String(status)}`).toBe(false);
-    }
-  });
-});
+/* The `compatibilityLabel` and `allowsActivation` suites moved to
+ * compatibility.test.ts, alongside the rest of the compatibility rules. Keeping
+ * them here would have meant two files asserting the same contract from two
+ * different modules. */
 
 describe("truncate", () => {
   it("leaves short text alone", () => {
