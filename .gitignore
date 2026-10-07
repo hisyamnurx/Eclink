@@ -79,3 +79,19 @@ cmsg*.txt
 # source. The pattern has no leading slash, so it also covers 0-Installer/.
 Eclyzer-Bridge-Setup-*.exe
 Eclyzer-Bridge-Setup-*.exe.sig
+
+# --- Kept locally, deliberately not published ---
+# These are useful on the machine that develops the project and are not needed to
+# build, run, or use it. They were removed from the published history so the
+# repository carries only what a user or contributor needs; the local copies are
+# ignored rather than deleted, so nothing is lost here.
+#
+# The product requirements and the working notes are internal documents. The logo
+# sources are the art the committed icons were generated from; the icons
+# themselves live in src-tauri/icons and public/logo-mark.png and are what the app
+# actually uses.
+0-Docs/PRD/
+0-Docs/Internal/
+0-Logo/
+0-Docs/logo.png
+

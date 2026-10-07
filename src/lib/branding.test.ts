@@ -128,9 +128,13 @@ describe("in-app branding", () => {
   });
 
   it("keeps the documentation wordmark pointing at a committed asset", () => {
+    // Both documents show the same mark, and it is the asset the application
+    // itself renders rather than a separate copy. A second copy of a logo is one
+    // more thing to forget to update, and it is how a stale mark survives a
+    // rebrand.
     const docs: Array<[string, string]> = [
-      ["README.md", "0-Docs/logo.png"],
-      ["0-Docs/README.md", "logo.png"],
+      ["README.md", "public/logo-mark.png"],
+      ["0-Docs/README.md", "../public/logo-mark.png"],
     ];
     for (const [doc, asset] of docs) {
       expect(readText(doc), `${doc} does not show the logo`).toContain(asset);

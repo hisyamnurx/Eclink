@@ -1,4 +1,4 @@
-<img src="logo.png" alt="Eclyzer Bridge" width="120" align="right" />
+<img src="../public/logo-mark.png" alt="Eclyzer Bridge" width="120" align="right" />
 
 # Eclyzer Bridge
 
