@@ -349,3 +349,67 @@ fn the_bundle_references_an_installer_icon_and_the_window_icon_set() {
         "nsis.installerIcon names {installer_icon}, which does not exist"
     );
 }
+
+#[test]
+fn the_bundle_helper_is_built_in_release_before_the_bundle() {
+    // `tauri.conf.json` bundles the credential helper from `target/release/`, and
+    // Tauri fails the whole build if that file is absent:
+    //
+    //     resource path `..\target\release\eclyzer-bridge-helper.exe` doesn't exist
+    //
+    // That ordering is easy to get wrong. Building the app from a clean checkout
+    // fails with an error that names a *build artefact* rather than the missing
+    // step, and it passes again as soon as a previous release build has left the
+    // helper behind - so the mistake is invisible on a machine that has built
+    // before and only bites on a fresh clone or in CI.
+    //
+    // The release workflow already builds it first. This asserts that the local
+    // npm entry point does too, because that is the one a contributor runs.
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("the crate lives inside the repository")
+        .to_path_buf();
+
+    let package =
+        std::fs::read_to_string(root.join("package.json")).expect("package.json readable");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&package).expect("package.json is valid JSON");
+    let scripts = &parsed["scripts"];
+
+    let build = scripts["tauri:build"]
+        .as_str()
+        .expect("the tauri:build script exists");
+    assert!(
+        build.contains("helper:build"),
+        "`npm run tauri:build` does not build the helper first, so a clean checkout \
+         would fail with \"resource path ... doesn't exist\". The script is: {build}"
+    );
+    // The helper must be a release build: the bundle reads from `target/release`.
+    let helper = scripts["helper:build"]
+        .as_str()
+        .expect("the helper:build script exists");
+    assert!(
+        helper.contains("--release"),
+        "the helper is not built in release mode, but the bundle reads it from \
+         target/release. The script is: {helper}"
+    );
+    assert!(
+        helper.contains("eclyzer-bridge-helper"),
+        "the helper:build script does not name the helper crate: {helper}"
+    );
+
+    // And the configuration must actually point at the path the script produces.
+    let config = std::fs::read_to_string(root.join("src-tauri").join("tauri.conf.json"))
+        .expect("tauri.conf.json readable");
+    let conf: serde_json::Value =
+        serde_json::from_str(&config).expect("tauri.conf.json is valid JSON");
+    let resources = conf["bundle"]["resources"]
+        .as_object()
+        .expect("bundle.resources is an object");
+    assert!(
+        resources
+            .keys()
+            .any(|k| k.contains("eclyzer-bridge-helper.exe") && k.contains("release")),
+        "bundle.resources does not read the helper from a release path: {resources:?}"
+    );
+}

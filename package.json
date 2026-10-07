@@ -17,7 +17,8 @@
     "test:watch": "vitest",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build"
+    "helper:build": "cargo build --release -p eclyzer-bridge-helper",
+    "tauri:build": "npm run helper:build && tauri build"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.9.0",
