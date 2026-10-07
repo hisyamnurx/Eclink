@@ -80,6 +80,11 @@ cmsg*.txt
 Eclyzer-Bridge-Setup-*.exe
 Eclyzer-Bridge-Setup-*.exe.sig
 
+# The whole folder is build output: the installer, its signature, and the updater
+# manifest generated for a release. None of it is source, and all of it is
+# regenerated. Publishing goes through a GitHub release, not through git.
+0-Installer/
+
 # --- Kept locally, deliberately not published ---
 # These are useful on the machine that develops the project and are not needed to
 # build, run, or use it. They were removed from the published history so the
