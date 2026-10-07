@@ -8,6 +8,7 @@
 import { useEffect, useId, useRef, type ReactNode, type ButtonHTMLAttributes } from "react";
 
 import { ApiError } from "../lib/api";
+import { useApp } from "../state/AppContext";
 
 /* --- Buttons ---------------------------------------------------------- */
 
@@ -165,15 +166,16 @@ export function EmptyState({
 }
 
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
+  const { t } = useApp();
   const api = error instanceof ApiError ? error : null;
   return (
     <div className="state" role="alert">
-      <div className="state__title">Something went wrong</div>
+      <div className="state__title">{t("error.generic")}</div>
       <div className="state__text">{api ? api.message : String(error)}</div>
       {api?.hint && <div className="state__text dim">{api.hint}</div>}
       {onRetry && (
         <Button variant="secondary" size="sm" onClick={onRetry}>
-          Try again
+          {t("action.retry")}
         </Button>
       )}
     </div>
@@ -213,7 +215,7 @@ interface ModalProps {
  * A modal dialog with real focus management.
  *
  * Focus moves into the dialog on open, Escape closes it, Tab is trapped, and
- * focus returns to whatever was focused before — without this, a keyboard user
+ * focus returns to whatever was focused before. Without this, a keyboard user
  * ends up on a control they cannot see.
  */
 export function Modal({ title, onClose, children, footer, wide = false }: ModalProps) {

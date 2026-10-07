@@ -3,8 +3,13 @@
  *
  * "Active:" only names a profile when Eclyzer Bridge recognizes its own managed
  * configuration. When the user has a custom configuration Bridge did not write,
- * this says "External Configuration" and never "Default" — claiming otherwise
+ * this says "External configuration" and never "Default" - claiming otherwise
  * would be a lie about the user's own file (PRD §20.2).
+ *
+ * Every string the screen authors itself goes through `t()`. The one exception is
+ * `agent.activeLabel`, which the backend builds, and `agent.note`, which is the
+ * backend's own wording; translating either here would mean guessing at copy this
+ * screen does not own.
  */
 
 import { useState } from "react";
@@ -21,8 +26,8 @@ import {
   type StatusTone,
 } from "../components/ui";
 import { ApiError, call, type AgentId, type AgentSummary } from "../lib/api";
-import { compatibilityLabel } from "../lib/compatibility";
 import { relativeTime } from "../lib/format";
+import type { MessageKey } from "../lib/i18n";
 import { openUrl, pickFolder } from "../lib/opener";
 import { useAction, useApp } from "../state/AppContext";
 
@@ -32,12 +37,23 @@ interface HomeProps {
   onPlayground: (agent: AgentId) => void;
 }
 
+/** The compatibility status word for a record, as a key rather than English. */
+const COMPATIBILITY_WORD: Record<string, MessageKey> = {
+  compatible: "status.compatible",
+  partially_compatible: "status.partiallyCompatible",
+  incompatible: "status.incompatible",
+  unknown: "status.notDetermined",
+  test_failed: "status.testFailed",
+  testing: "status.testing",
+  untested: "status.notTested",
+};
+
 export function Home({ onConfigure, onHistory, onPlayground }: HomeProps) {
-  const { agents, profiles, loading, loadError, reload } = useApp();
+  const { agents, profiles, loading, loadError, reload, t } = useApp();
   const [launchTarget, setLaunchTarget] = useState<AgentId | null>(null);
 
   if (loading) {
-    return <LoadingState label="Checking your setup…" />;
+    return <LoadingState label={t("home.checkingSetup")} />;
   }
 
   if (loadError) {
@@ -50,22 +66,16 @@ export function Home({ onConfigure, onHistory, onPlayground }: HomeProps) {
     <div className="main__inner">
       <header className="page-header">
         <div className="page-header__text">
-          <h1>Overview</h1>
-          <p className="page-header__subtitle">
-            Eclyzer Bridge points Codex and Claude Code at the provider you choose, without you
-            editing configuration files by hand.
-          </p>
+          <h1>{t("home.title")}</h1>
+          <p className="page-header__subtitle">{t("home.intro")}</p>
         </div>
         <Button variant="primary" onClick={() => onConfigure()}>
-          {configured ? "Add provider" : "Set up a provider"}
+          {configured ? t("providers.add") : t("home.setUpProvider")}
         </Button>
       </header>
 
       {agents.length === 0 && (
-        <EmptyState title="No coding agents were found">
-          Eclyzer Bridge could not find Codex or Claude Code on this machine. Install one, then
-          choose Refresh.
-        </EmptyState>
+        <EmptyState title={t("home.noAgents")}>{t("home.noAgentsLong")}</EmptyState>
       )}
 
       {agents.map((agent) => (
@@ -97,7 +107,7 @@ function AgentCard({
   onPlayground: () => void;
   onLaunch: () => void;
 }) {
-  const { profiles, refreshAgent, notify } = useApp();
+  const { profiles, refreshAgent, notify, t } = useApp();
   const refresh = useAction();
 
   // The profile the user believes is active for this agent, if any targets it.
@@ -113,12 +123,14 @@ function AgentCard({
         <div className="card__title">
           <h2 id={`agent-${agent.agent}`}>{agent.displayName}</h2>
           <div className="card__hint">
-            {agent.installed ? `Version ${agent.version ?? "unknown"}` : "Not installed"}
+            {agent.installed
+              ? t("home.versionValue", { version: agent.version ?? t("home.versionUnknown") })
+              : t("home.notInstalled")}
           </div>
         </div>
         <div className="card__actions">
           <Badge tone={installedTone} dot>
-            {agent.installed ? "Detected" : "Not found"}
+            {agent.installed ? t("status.detected") : t("status.notFound")}
           </Badge>
           <Badge
             tone={
@@ -131,10 +143,10 @@ function AgentCard({
             dot
           >
             {agent.configState === "invalid"
-              ? "Config unreadable"
+              ? t("status.configUnreadable")
               : agent.configState === "valid"
-                ? "Config OK"
-                : "No config yet"}
+                ? t("status.configOk")
+                : t("status.noConfigYet")}
           </Badge>
         </div>
       </div>
@@ -142,56 +154,56 @@ function AgentCard({
       {!agent.installed && (
         <Banner
           tone="warn"
-          title={`${agent.displayName} was not found`}
+          title={t("home.notFoundTitle", { agent: agent.displayName })}
           actions={
             agent.installGuideUrl ? (
               <Button
                 size="sm"
                 variant="secondary"
-                onClick={() => void openLink(agent.installGuideUrl!, notify)}
+                onClick={() => void openLink(agent.installGuideUrl!, notify, t)}
               >
-                Installation guide
+                {t("home.installGuide")}
               </Button>
             ) : undefined
           }
         >
-          Eclyzer Bridge installs nothing on your behalf. Install {agent.displayName}, then choose
-          Refresh.
+          {t("home.notFoundBody", { agent: agent.displayName })}
         </Banner>
       )}
 
       {agent.configState === "invalid" && (
-        <Banner tone="bad" title="Eclyzer Bridge will not modify this configuration">
-          {agent.configPath} is not valid. Eclyzer Bridge refuses to rewrite a file it cannot parse,
-          because doing so would destroy settings it does not understand. Fix the file yourself,
-          then choose Refresh.
+        <Banner tone="bad" title={t("home.invalidConfigTitle")}>
+          {t("home.invalidConfigBody", { path: agent.configPath ?? "" })}
         </Banner>
       )}
 
+      {/* `agent.note` is the backend's own sentence, so it is shown as sent. */}
       {agent.note && <Banner tone="warn">{agent.note}</Banner>}
 
       <Meta
         items={[
-          { key: "Active", value: <ActiveValue agent={agent} /> },
+          { key: t("action.active"), value: <ActiveValue agent={agent} /> },
           {
-            key: "Endpoint",
-            value: agent.activeKind === "managed" && candidate ? candidate.baseUrl : "—",
+            key: t("playground.endpoint"),
+            value: agent.activeKind === "managed" && candidate ? candidate.baseUrl : "-",
             mono: true,
           },
           {
-            key: "Model",
-            value: agent.activeKind === "managed" && candidate ? candidate.model : "—",
+            key: t("providers.model"),
+            value: agent.activeKind === "managed" && candidate ? candidate.model : "-",
             mono: true,
           },
           {
-            key: "Last tested",
+            key: t("home.lastTested"),
             value: record?.testedAt
-              ? `${compatibilityLabel(record.status)} · ${relativeTime(record.testedAt)}`
-              : "Not tested",
+              ? `${t(COMPATIBILITY_WORD[record.status] ?? "status.notTested")} · ${relativeTime(
+                  record.testedAt,
+                )}`
+              : t("status.notTested"),
           },
           {
-            key: "Config file",
-            value: agent.configPath ?? "not found",
+            key: t("home.configFile"),
+            value: agent.configPath ?? t("status.notFound"),
             mono: true,
           },
         ]}
@@ -199,25 +211,25 @@ function AgentCard({
 
       <div className="row row--wrap">
         <Button variant="primary" onClick={onConfigure} disabled={!agent.installed}>
-          Configure
+          {t("home.configure")}
         </Button>
         <Button onClick={onLaunch} disabled={!agent.installed}>
-          Open {agent.displayName}
+          {t("home.openAgent", { agent: agent.displayName })}
         </Button>
         <Button onClick={onPlayground} disabled={!agent.installed}>
-          Playground
+          {t("home.playground")}
         </Button>
         <Button onClick={onHistory} variant="ghost">
-          History
+          {t("home.history")}
         </Button>
         <div className="spacer" />
         <Button
           variant="ghost"
           onClick={onRefresh}
           busy={refresh.busy}
-          aria-label={`Refresh ${agent.displayName} detection`}
+          aria-label={t("home.refreshAgent", { agent: agent.displayName })}
         >
-          Refresh
+          {t("home.refresh")}
         </Button>
       </div>
     </section>
@@ -226,25 +238,28 @@ function AgentCard({
 
 /** The "Active" value, which must never overstate what Bridge knows. */
 function ActiveValue({ agent }: { agent: AgentSummary }) {
+  const { t } = useApp();
+
   if (agent.activeKind === "managed") {
     return (
       <>
-        {agent.activeProfileName ?? "A provider profile"}{" "}
-        <span className="dim small">(set by Eclyzer Bridge)</span>
+        {agent.activeProfileName ?? t("home.activeFallback")}{" "}
+        <span className="dim small">({t("home.activeManagedHint")})</span>
       </>
     );
   }
   if (agent.activeKind === "external") {
     return (
       <>
-        External Configuration{" "}
-        <span className="dim small">(your own settings; Eclyzer Bridge did not write these)</span>
+        {t("status.externalConfiguration")}{" "}
+        <span className="dim small">({t("home.externalHint")})</span>
       </>
     );
   }
   return (
     <>
-      Default configuration <span className="dim small">(no custom provider configured)</span>
+      {t("home.defaultConfiguration")}{" "}
+      <span className="dim small">({t("home.defaultHint")})</span>
     </>
   );
 }
@@ -258,21 +273,24 @@ function ActiveValue({ agent }: { agent: AgentSummary }) {
 function openLink(
   url: string,
   notify: (tone: "success" | "error" | "info", title: string, text?: string) => void,
+  t: (key: MessageKey) => string,
 ) {
   void openUrl(url).catch((error: unknown) => {
     const api = error instanceof ApiError ? error : null;
-    notify("error", api?.message ?? "Could not open the link.", api?.hint ?? url);
+    notify("error", api?.message ?? t("home.openLinkFailed"), api?.hint ?? url);
   });
 }
 
 /** Launch dialog: choose a project folder, preview the command, then run it. */
 function LaunchDialog({ agent, onClose }: { agent: AgentId; onClose: () => void }) {
-  const { settings, saveSettings, notify } = useApp();
+  const { settings, saveSettings, notify, t } = useApp();
   const [directory, setDirectory] = useState(settings?.lastProjectDirectory ?? "");
   const [preview, setPreview] = useState<string | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const action = useAction();
   const remember = settings?.rememberProjectDirectory ?? false;
+
+  const agentName = agent === "codex" ? "Codex" : "Claude Code";
 
   const chooseFolder = async () => {
     try {
@@ -284,7 +302,7 @@ function LaunchDialog({ agent, onClose }: { agent: AgentId; onClose: () => void 
       }
     } catch (error) {
       const api = error instanceof ApiError ? error : null;
-      notify("error", api?.message ?? "Could not open the folder picker.");
+      notify("error", api?.message ?? t("launch.folderPickerFailed"));
     }
   };
 
@@ -318,7 +336,7 @@ function LaunchDialog({ agent, onClose }: { agent: AgentId; onClose: () => void 
         if (remember && settings?.lastProjectDirectory !== directory) {
           await saveSettings({ lastProjectDirectory: directory });
         }
-        notify("success", "Opened in a new terminal window.");
+        notify("success", t("launch.openedToast"));
         onClose();
       },
       {
@@ -331,30 +349,27 @@ function LaunchDialog({ agent, onClose }: { agent: AgentId; onClose: () => void 
 
   return (
     <Modal
-      title={`Open ${agent === "codex" ? "Codex" : "Claude Code"}`}
+      title={t("launch.title", { agent: agentName })}
       onClose={onClose}
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t("action.cancel")}
           </Button>
           <Button variant="secondary" onClick={doPreview} busy={action.busy} disabled={!directory}>
-            Preview command
+            {t("launch.preview")}
           </Button>
           <Button variant="primary" onClick={doLaunch} busy={action.busy} disabled={!directory}>
-            Open
+            {t("action.open")}
           </Button>
         </>
       }
     >
-      <p className="muted small">
-        The agent opens in a new terminal window in the folder you choose. Eclyzer Bridge exits as
-        soon as the window opens — closing Bridge never closes your agent.
-      </p>
+      <p className="muted small">{t("launch.body", { agent: agentName })}</p>
 
       <div className="field">
         <label className="field__label" htmlFor="launch-folder">
-          Project folder
+          {t("launch.folderLabel")}
         </label>
         <div className="row">
           <input
@@ -371,11 +386,11 @@ function LaunchDialog({ agent, onClose }: { agent: AgentId; onClose: () => void 
             aria-invalid={previewError ? true : undefined}
           />
           <Button onClick={() => void chooseFolder()} className="nowrap">
-            Browse…
+            {t("action.browse")}
           </Button>
         </div>
         <div className="field__hint" id="launch-folder-hint">
-          The folder must already exist.
+          {t("launch.folderHint", { agent: agentName })}
         </div>
         {previewError && (
           <div className="field__error" role="alert">
@@ -386,12 +401,9 @@ function LaunchDialog({ agent, onClose }: { agent: AgentId; onClose: () => void 
 
       {preview && (
         <div className="stack stack--tight">
-          <div className="field__label">Command that will run</div>
+          <div className="field__label">{t("launch.previewTitle")}</div>
           <pre className="code selectable">{preview}</pre>
-          <div className="field__hint">
-            The model and provider names are passed as separate arguments, never interpreted as
-            shell commands.
-          </div>
+          <div className="field__hint">{t("launch.previewHint")}</div>
         </div>
       )}
     </Modal>

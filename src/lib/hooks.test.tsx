@@ -118,7 +118,7 @@ describe("useAsyncData", () => {
 
     // Count React's complaints. Without the `cancelled` guard in the hook, the
     // resolve handler calls `setData` on an unmounted tree. React 19 does not
-    // throw for that — it silently ignores the update — so asserting on the
+    // throw for that - it silently ignores the update - so asserting on the
     // rendered value alone would pass either way and prove nothing. Capturing
     // the warning is what actually distinguishes the two.
     const errors: string[] = [];

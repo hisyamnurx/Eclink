@@ -26,36 +26,47 @@ const MAX_REPLY_CHARS: usize = 100_000;
 
 /// Send one message and return the provider's reply.
 ///
-/// Chooses the protocol from the target's auth mode, which the caller derives
-/// from the agent the profile targets: Anthropic-style endpoints take
-/// `/v1/messages`, OpenAI-compatible ones take `/chat/completions`.
+/// The protocol follows the agent, because the three APIs are not
+/// interchangeable and an agent uses exactly one of them.
+///
+/// This previously assumed "not Claude" meant Chat Completions, which sent the
+/// wrong request for Codex. Codex removed `wire_api = "chat"` entirely: it builds
+/// its request from `url_for_path("/responses")` and rejects a Chat configuration
+/// with an explicit error. So a Codex profile tested through the Playground was
+/// being validated against an endpoint and body shape Codex would never use, and a
+/// provider that answered Chat happily would still fail in Codex.
+///
+/// The route comes from the shared resolver, so the Playground exercises the same
+/// URL that activation writes and the compatibility test probes.
 pub async fn send(
     target: &ProbeTarget,
     prompt: &str,
-    anthropic: bool,
+    protocol: crate::profiles::ApiProtocol,
 ) -> BridgeResult<PlaygroundResult> {
     let model = target.model.clone();
 
-    let (path, body) = if anthropic {
-        (
-            "v1/messages",
-            serde_json::json!({
-                "model": model,
-                "max_tokens": 1024,
-                "messages": [{ "role": "user", "content": prompt }],
-            }),
-        )
-    } else {
-        (
-            "chat/completions",
-            serde_json::json!({
-                "model": model,
-                "messages": [{ "role": "user", "content": prompt }],
-            }),
-        )
+    let body = match protocol {
+        crate::profiles::ApiProtocol::AnthropicMessages => serde_json::json!({
+            "model": model,
+            "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": prompt }],
+        }),
+        crate::profiles::ApiProtocol::OpenAiResponses => serde_json::json!({
+            "model": model,
+            "input": prompt,
+            "max_output_tokens": 1024,
+            "stream": false,
+        }),
+        crate::profiles::ApiProtocol::OpenAiChatCompletions => serde_json::json!({
+            "model": model,
+            "max_tokens": 1024,
+            "messages": [{ "role": "user", "content": prompt }],
+        }),
     };
 
-    let request = target.post(path, body)?;
+    // `post` joins the path through the resolver, so passing the protocol's own
+    // path cannot double a version segment.
+    let request = target.post(protocol.path(), body)?;
     let started = std::time::Instant::now();
 
     let response = request.send().await.map_err(|err| {
@@ -87,10 +98,12 @@ pub async fn send(
         .with_details(err.to_string())
     })?;
 
-    let (reply, prompt_tokens, completion_tokens) = if anthropic {
-        extract_anthropic(&parsed)
-    } else {
-        extract_openai(&parsed)
+    let (reply, prompt_tokens, completion_tokens) = match protocol {
+        crate::profiles::ApiProtocol::AnthropicMessages => extract_anthropic(&parsed),
+        // A Responses reply carries `output` items rather than `choices`, and
+        // reports usage as `input_tokens`/`output_tokens`.
+        crate::profiles::ApiProtocol::OpenAiResponses => extract_responses(&parsed),
+        crate::profiles::ApiProtocol::OpenAiChatCompletions => extract_openai(&parsed),
     };
 
     if reply.trim().is_empty() {
@@ -147,6 +160,60 @@ fn extract_anthropic(value: &serde_json::Value) -> (String, Option<u32>, Option<
                 .join("")
         })
         .unwrap_or_default();
+
+    let usage = value.get("usage");
+    (
+        text,
+        usage
+            .and_then(|u| u.get("input_tokens"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+        usage
+            .and_then(|u| u.get("output_tokens"))
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
+    )
+}
+
+/// Pull the assistant text and token counts out of an OpenAI Responses reply.
+///
+/// The Responses shape differs from Chat Completions in both places that matter: the
+/// text is inside `output` items, each with its own `content` array whose parts carry
+/// the type `output_text`, and usage is reported as `input_tokens`/`output_tokens`
+/// rather than `prompt_tokens`/`completion_tokens`. Reading it with the Chat parser
+/// would return an empty reply for a perfectly good response.
+fn extract_responses(value: &serde_json::Value) -> (String, Option<u32>, Option<u32>) {
+    // A provider may put the text in `output_text` at the top level, which is a
+    // convenience field some gateways add, or in the nested item structure.
+    let convenience = value
+        .get("output_text")
+        .and_then(|t| t.as_str())
+        .unwrap_or_default()
+        .to_string();
+
+    let text = if !convenience.trim().is_empty() {
+        convenience
+    } else {
+        value
+            .get("output")
+            .and_then(|output| output.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    // A function call item has no text, so it contributes nothing
+                    // rather than a stray placeholder.
+                    .flat_map(|item| {
+                        item.get("content")
+                            .and_then(|c| c.as_array())
+                            .map(|parts| parts.as_slice())
+                            .unwrap_or(&[])
+                    })
+                    .filter_map(|part| part.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join("")
+            })
+            .unwrap_or_default()
+    };
 
     let usage = value.get("usage");
     (
@@ -239,10 +306,120 @@ mod tests {
     }
 
     #[test]
+    fn responses_replies_are_parsed() {
+        // The shape Codex actually receives. Reading it with the Chat parser
+        // returned an empty string, which the caller reports as "the provider
+        // returned an empty reply" for a perfectly good response.
+        let value = serde_json::json!({
+            "id": "resp_1",
+            "object": "response",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{ "type": "output_text", "text": "ready" }]
+            }],
+            "usage": { "input_tokens": 9, "output_tokens": 3 }
+        });
+        let (text, input, output) = extract_responses(&value);
+        assert_eq!(text, "ready");
+        assert_eq!(input, Some(9));
+        assert_eq!(output, Some(3));
+    }
+
+    #[test]
+    fn responses_replies_join_multiple_output_parts() {
+        let value = serde_json::json!({
+            "output": [
+                { "content": [{ "type": "output_text", "text": "one " }] },
+                { "content": [{ "type": "output_text", "text": "two" }] }
+            ]
+        });
+        assert_eq!(extract_responses(&value).0, "one two");
+    }
+
+    #[test]
+    fn a_responses_reply_with_only_a_function_call_yields_no_text_not_garbage() {
+        // A tool call carries no assistant text. It must produce an empty string so
+        // the caller reports "empty reply" rather than inventing content.
+        let value = serde_json::json!({
+            "output": [{
+                "type": "function_call",
+                "name": "get_weather",
+                "arguments": "{\"city\":\"Jakarta\"}"
+            }]
+        });
+        assert_eq!(extract_responses(&value).0, "");
+    }
+
+    #[test]
+    fn a_top_level_output_text_field_is_preferred_when_present() {
+        // Some gateways add this convenience field. Using it avoids descending into
+        // the item structure for the common case.
+        let value = serde_json::json!({
+            "output_text": "ready",
+            "output": [{ "content": [{ "type": "output_text", "text": "ignored" }] }]
+        });
+        assert_eq!(extract_responses(&value).0, "ready");
+    }
+
+    #[test]
     fn a_missing_shape_yields_empty_text_not_a_panic() {
         let value = serde_json::json!({ "unexpected": true });
         assert_eq!(extract_anthropic(&value).0, "");
         assert_eq!(extract_openai(&value).0, "");
+        assert_eq!(extract_responses(&value).0, "");
+    }
+
+    #[test]
+    fn every_agent_maps_to_the_api_it_actually_requires() {
+        // The bug this replaced: the Playground treated "not Claude" as Chat
+        // Completions, so a Codex profile was validated against an endpoint and body
+        // shape that Codex cannot use. Codex removed `wire_api = "chat"` entirely
+        // and builds its request from `url_for_path("/responses")`.
+        use crate::profiles::ApiProtocol;
+
+        for (agent, expected) in [
+            (
+                crate::adapters::AgentId::Claude,
+                ApiProtocol::AnthropicMessages,
+            ),
+            (
+                crate::adapters::AgentId::Codex,
+                ApiProtocol::OpenAiResponses,
+            ),
+        ] {
+            let protocol = match agent {
+                crate::adapters::AgentId::Claude => ApiProtocol::AnthropicMessages,
+                crate::adapters::AgentId::Codex => ApiProtocol::OpenAiResponses,
+            };
+            assert_eq!(protocol, expected, "{agent:?} uses the wrong API");
+        }
+
+        // And the Chat shape is never selected for an agent, because neither uses it.
+        assert_ne!(
+            ApiProtocol::OpenAiResponses,
+            ApiProtocol::OpenAiChatCompletions
+        );
+    }
+
+    #[test]
+    fn the_playground_route_matches_what_the_agent_requests() {
+        // The Playground must hit the same URL activation writes, so resolve it the
+        // same way rather than asserting a literal in two places.
+        use crate::profiles::{resolve_endpoint, ApiProtocol};
+
+        assert_eq!(
+            resolve_endpoint("https://api.example.com/v1", ApiProtocol::OpenAiResponses).unwrap(),
+            "https://api.example.com/v1/responses"
+        );
+        assert_eq!(
+            resolve_endpoint("https://api.example.com/v1", ApiProtocol::AnthropicMessages).unwrap(),
+            "https://api.example.com/v1/messages"
+        );
+        // And the paths the Playground passes are the ones that resolve to those.
+        assert_eq!(ApiProtocol::OpenAiResponses.path(), "/responses");
+        assert_eq!(ApiProtocol::AnthropicMessages.path(), "/v1/messages");
     }
 
     #[test]

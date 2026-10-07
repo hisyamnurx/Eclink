@@ -2,7 +2,7 @@
  * Data-loading hooks.
  *
  * `useAsyncData` exists so screens do not each invent their own
- * loading/error/refetch bookkeeping — and, more importantly, so none of them
+ * loading/error/refetch bookkeeping - and, more importantly, so none of them
  * call `setState` synchronously in an effect body, which causes cascading
  * renders and is a real performance bug rather than a style preference.
  */

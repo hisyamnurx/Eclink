@@ -13,31 +13,38 @@
  */
 
 import type { AgentSummary, ProfileSummary } from "./api";
+import type { MessageKey } from "./i18n";
 
 /** Whether a status permits activation. Mirrors the backend rule. */
 export function allowsActivation(status: string | undefined): boolean {
   return status === "compatible" || status === "partially_compatible";
 }
 
-/** A short, human status word. */
-export function compatibilityLabel(status: string | undefined): string {
+/**
+ * The status word as a message key, for the caller to resolve with `t()`.
+ *
+ * A key rather than a literal, so the badge reads in the user's language. The
+ * words used to be duplicated here and in the dictionary, which is exactly how
+ * the two drifted apart.
+ */
+export function compatibilityLabel(status: string | undefined): MessageKey {
   switch (status) {
     case "compatible":
-      return "Compatible";
+      return "status.compatible";
     case "partially_compatible":
-      return "Partially compatible";
+      return "status.partiallyCompatible";
     case "incompatible":
-      return "Incompatible";
+      return "status.incompatible";
     case "unknown":
-      return "Not determined";
+      return "status.notDetermined";
     case "test_failed":
-      return "Test failed";
+      return "status.testFailed";
     case "testing":
-      return "Testing…";
+      return "status.testing";
     case "untested":
-      return "Not tested";
+      return "status.notTested";
     default:
-      return "Not tested";
+      return "status.notTested";
   }
 }
 
@@ -47,12 +54,12 @@ export function recordFor(profile: ProfileSummary, agent: string) {
 }
 
 export interface ActivationGate {
-  /** The status word shown in the badge. */
-  label: string;
+  /** The status word shown in the badge, as a key for `t()`. */
+  label: MessageKey;
   /** Whether the Activate button is enabled. */
   canActivate: boolean;
-  /** Why activation is blocked, for the button's tooltip. */
-  blockedReason?: string;
+  /** Why activation is blocked, as a key for `t()`, for the button's tooltip. */
+  blockedReason?: MessageKey;
   /** Whether the profile is the one currently applied to this agent. */
   isActive: boolean;
 }
@@ -61,7 +68,9 @@ export interface ActivationGate {
  * Everything the row needs to render its badge and its Activate button.
  *
  * Computed in one place and from one value, so the badge can never claim the
- * endpoint is usable while the button says it is not.
+ * endpoint is usable while the button says it is not. The two text values are
+ * message keys rather than sentences, so the row can render them in either
+ * language without this module knowing which one is active.
  */
 export function activationGate(
   profile: ProfileSummary,
@@ -71,17 +80,16 @@ export function activationGate(
   const status = recordFor(profile, agent)?.status;
   const label = compatibilityLabel(status);
   const summary = agents.find((entry) => entry.agent === agent);
-  const isActive =
-    summary?.activeKind === "managed" && summary.activeProfileName === profile.name;
+  const isActive = summary?.activeKind === "managed" && summary.activeProfileName === profile.name;
 
   if (!profile.hasSecret) {
-    return { label, canActivate: false, blockedReason: "Add an API key before activating.", isActive };
+    return { label, canActivate: false, blockedReason: "providers.addKeyFirst", isActive };
   }
   if (!allowsActivation(status)) {
     return {
       label,
       canActivate: false,
-      blockedReason: "Test this provider against the agent first.",
+      blockedReason: "providers.testFirst",
       isActive,
     };
   }

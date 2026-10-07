@@ -55,6 +55,17 @@ pub struct AppSettings {
     /// Whether the user has been told about the insecure-HTTP risk generally.
     #[serde(default)]
     pub insecure_endpoint_notice_seen: bool,
+    /// Interface language, as a BCP-47-ish tag: `en` or `id` (PRD §55).
+    ///
+    /// Defaulted rather than required, so an `app.json` written by an earlier
+    /// version keeps loading and simply reads as English.
+    #[serde(default = "default_language")]
+    pub language: String,
+}
+
+/// The language an installation uses before the user chooses one.
+fn default_language() -> String {
+    "en".to_string()
 }
 
 fn default_true() -> bool {
@@ -93,6 +104,7 @@ impl Default for AppSettings {
             first_run_complete: false,
             cost_notice_seen: false,
             insecure_endpoint_notice_seen: false,
+            language: default_language(),
         }
     }
 }

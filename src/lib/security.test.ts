@@ -73,7 +73,7 @@ describe("openUrl", () => {
   });
 
   it("accepts http and https, reporting a plugin failure rather than a validation one", async () => {
-    // No Tauri plugin is present in this environment, so the call fails — but it
+    // No Tauri plugin is present in this environment, so the call fails - but it
     // must fail as "could not open your browser", not as "that link is invalid",
     // which proves the URL passed validation.
     const httpError = await openUrl("https://example.com").catch((raw: unknown) => raw);

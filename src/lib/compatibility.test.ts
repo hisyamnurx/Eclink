@@ -6,8 +6,8 @@
  * stayed disabled. The cause was that the test handler wrote the result to local
  * state but never reloaded the `profiles` array, which is where the badge and the
  * Activate gate read `compatibility` from. The badge only corrected itself when
- * something else happened to reload profiles — a tab switch, a refresh, an
- * activate — which is why it looked like the state changed on its own after a few
+ * something else happened to reload profiles (a tab switch, a refresh, an
+ * activate), which is why it looked like the state changed on its own after a few
  * seconds.
  *
  * The tests below pin the *contract*: after a test run, the compatibility the UI
@@ -20,11 +20,9 @@ import { describe, expect, it } from "vitest";
 
 import type { AgentSummary, CompatibilityStatus, ProfileSummary } from "./api";
 import { activationGate, allowsActivation, compatibilityLabel } from "./compatibility";
+import { dictionaryFor, LANGUAGES } from "./i18n";
 
-function profileWith(
-  status: CompatibilityStatus | undefined,
-  hasSecret = true,
-): ProfileSummary {
+function profileWith(status: CompatibilityStatus | undefined, hasSecret = true): ProfileSummary {
   return {
     id: "p1",
     name: "provider_a",
@@ -55,18 +53,42 @@ function agent(overrides: Partial<AgentSummary> = {}): AgentSummary {
 }
 
 describe("compatibilityLabel", () => {
-  it("gives every status a human word", () => {
-    expect(compatibilityLabel("compatible")).toBe("Compatible");
-    expect(compatibilityLabel("partially_compatible")).toBe("Partially compatible");
-    expect(compatibilityLabel("incompatible")).toBe("Incompatible");
-    expect(compatibilityLabel("test_failed")).toBe("Test failed");
-    expect(compatibilityLabel("testing")).toBe("Testing…");
+  it("gives every status a message key, not an English word", () => {
+    expect(compatibilityLabel("compatible")).toBe("status.compatible");
+    expect(compatibilityLabel("partially_compatible")).toBe("status.partiallyCompatible");
+    expect(compatibilityLabel("incompatible")).toBe("status.incompatible");
+    expect(compatibilityLabel("test_failed")).toBe("status.testFailed");
+    expect(compatibilityLabel("testing")).toBe("status.testing");
   });
 
   it("treats an unknown status as untested rather than as compatible", () => {
     // Overstating here would let a user activate something never verified.
-    expect(compatibilityLabel(undefined)).toBe("Not tested");
-    expect(compatibilityLabel("something_new")).toBe("Not tested");
+    expect(compatibilityLabel(undefined)).toBe("status.notTested");
+    expect(compatibilityLabel("something_new")).toBe("status.notTested");
+  });
+
+  it("names only keys the dictionaries carry, in every language", () => {
+    // The words used to be duplicated here as literals, which left these
+    // dictionary entries dead. A key that no dictionary has would render as the
+    // key itself, so this pins the other half of the contract.
+    const statuses: Array<string | undefined> = [
+      "compatible",
+      "partially_compatible",
+      "incompatible",
+      "unknown",
+      "test_failed",
+      "testing",
+      "untested",
+      undefined,
+      "something_new",
+    ];
+    for (const language of LANGUAGES) {
+      const dictionary = dictionaryFor(language);
+      for (const status of statuses) {
+        const key = compatibilityLabel(status);
+        expect(dictionary[key], `${language} is missing ${key}`).toBeTruthy();
+      }
+    }
   });
 });
 
@@ -93,26 +115,22 @@ describe("allowsActivation", () => {
 describe("the activation gate", () => {
   it("is closed before any test has run", () => {
     const gate = activationGate(profileWith(undefined), [agent()], "claude");
-    expect(gate.label).toBe("Not tested");
+    expect(gate.label).toBe("status.notTested");
     expect(gate.canActivate).toBe(false);
-    expect(gate.blockedReason).toBeTruthy();
+    expect(gate.blockedReason).toBe("providers.testFirst");
   });
 
   it("opens as soon as a compatible result is present", () => {
     // The exact reported failure: 7/7 passed and the panel said Compatible, but
     // the badge said Not tested and Activate was disabled.
     const gate = activationGate(profileWith("compatible"), [agent()], "claude");
-    expect(gate.label).toBe("Compatible");
+    expect(gate.label).toBe("status.compatible");
     expect(gate.canActivate).toBe(true);
     expect(gate.blockedReason).toBeUndefined();
   });
 
   it("opens for a partially compatible result too", () => {
-    const gate = activationGate(
-      profileWith("partially_compatible"),
-      [agent()],
-      "claude",
-    );
+    const gate = activationGate(profileWith("partially_compatible"), [agent()], "claude");
     expect(gate.canActivate).toBe(true);
   });
 
@@ -120,7 +138,7 @@ describe("the activation gate", () => {
     // A compatible endpoint is not enough; the credential must be stored.
     const gate = activationGate(profileWith("compatible", false), [agent()], "claude");
     expect(gate.canActivate).toBe(false);
-    expect(gate.blockedReason).toContain("API key");
+    expect(gate.blockedReason).toBe("providers.addKeyFirst");
   });
 
   it("stays closed after a failed test", () => {

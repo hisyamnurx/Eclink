@@ -180,18 +180,22 @@ fn no_production_code_installs_a_shim_or_path_entry() {
     // directory, not a shim of our own. What matters is whether anything is
     // *written* to such a location, which
     // `the_only_files_written_are_the_two_agent_configurations` covers.
-    for needle in ["\\Microsoft\\Windows\\CurrentVersion\\App Paths"] {
-        let hits = search_all(needle);
-        assert!(
-            hits.is_empty(),
-            "production code contains `{needle}`, which suggests a launcher shim is \
-             installed:\n  {}",
-            hits.join("\n  ")
-        );
-    }
+    // A shim registered under the Windows "App Paths" key would outlive an
+    // uninstall, so its absence is asserted directly.
+    let app_paths = search_all("\\Microsoft\\Windows\\CurrentVersion\\App Paths");
+    assert!(
+        app_paths.is_empty(),
+        "production code references the App Paths registry key, which suggests a \
+         launcher shim is installed:\n  {}",
+        app_paths.join("\n  ")
+    );
 
     // A persistent PATH edit would have to go through one of these.
-    for needle in ["set_var(\"PATH", "SetEnvironmentVariable", "Environment]::SetEnvironmentVariable"] {
+    for needle in [
+        "set_var(\"PATH",
+        "SetEnvironmentVariable",
+        "Environment]::SetEnvironmentVariable",
+    ] {
         let hits = search_all(needle);
         assert!(
             hits.is_empty(),

@@ -43,7 +43,7 @@ interface ConfigureProps {
 }
 
 export function Configure({ initialAgent }: ConfigureProps) {
-  const { agents, profiles, loading, loadError, reloadProfiles, notify } = useApp();
+  const { t, agents, profiles, loading, loadError, reloadProfiles, notify } = useApp();
   const [templates, setTemplates] = useState<ProviderTemplate[]>([]);
   const [editing, setEditing] = useState<ProfileSummary | "new" | null>(null);
   const duplicate = useAction();
@@ -64,10 +64,8 @@ export function Configure({ initialAgent }: ConfigureProps) {
         await reloadProfiles();
         notify(
           "success",
-          `Copied ${profile.name}.`,
-          result.hasSecret
-            ? "The API key was copied to the new provider."
-            : "This provider had no stored key to copy.",
+          t("toast.providerCopied", { name: profile.name }),
+          result.hasSecret ? t("toast.keyCopied") : t("toast.noKeyCopied"),
         );
         return result;
       },
@@ -102,7 +100,7 @@ export function Configure({ initialAgent }: ConfigureProps) {
     preferredAgent;
 
   if (loading) {
-    return <LoadingState label="Loading your providers…" />;
+    return <LoadingState label={t("providers.loading")} />;
   }
 
   if (loadError) {
@@ -113,23 +111,18 @@ export function Configure({ initialAgent }: ConfigureProps) {
     <div className="main__inner">
       <header className="page-header">
         <div className="page-header__text">
-          <h1>Providers</h1>
-          <p className="page-header__subtitle">
-            A provider profile is an endpoint, a model, and credentials. Eclyzer Bridge writes only
-            the settings it owns and leaves everything else in your configuration untouched.
-          </p>
+          <h1>{t("providers.title")}</h1>
+          <p className="page-header__subtitle">{t("providers.subtitle")}</p>
         </div>
         <Button variant="primary" onClick={() => setEditing("new")}>
-          Add provider
+          {t("providers.add")}
         </Button>
       </header>
 
       {agentOptions.length === 0 ? (
-        <EmptyState title="No coding agent detected">
-          Install Codex or Claude Code, then reload this page.
-        </EmptyState>
+        <EmptyState title={t("error.noAgents")}>{t("providers.noAgentsBody")}</EmptyState>
       ) : (
-        <div className="tabs" role="tablist" aria-label="Coding agent">
+        <div className="tabs" role="tablist" aria-label={t("playground.agentTabsAria")}>
           {agentOptions.map((agent) => (
             <button
               key={agent.agent}
@@ -176,7 +169,7 @@ export function Configure({ initialAgent }: ConfigureProps) {
 
 /** The honest cost notice: testing talks to a real endpoint. */
 function CostNoticeBanner() {
-  const { settings, saveSettings } = useApp();
+  const { t, settings, saveSettings } = useApp();
   const [dismissed, setDismissed] = useState(false);
 
   if (!settings || settings.costNoticeSeen || dismissed) return null;
@@ -184,7 +177,7 @@ function CostNoticeBanner() {
   return (
     <Banner
       tone="info"
-      title="Testing uses your provider account"
+      title={t("providers.costNoticeTitle")}
       actions={
         <Button
           size="sm"
@@ -194,12 +187,11 @@ function CostNoticeBanner() {
             void saveSettings({ costNoticeSeen: true });
           }}
         >
-          Got it
+          {t("providers.costNoticeAck")}
         </Button>
       }
     >
-      Test Connection and the Playground send real requests to your provider and may count towards
-      your usage or cost. Eclyzer Bridge never sends anything on its own.
+      {t("providers.costNoticeBody")}
     </Banner>
   );
 }
@@ -219,14 +211,15 @@ function ProfileList({
   onDuplicate: (profile: ProfileSummary) => void;
   onChanged: () => void;
 }) {
-  const { notify } = useApp();
+  const { t, notify } = useApp();
   const [confirmDelete, setConfirmDelete] = useState<ProfileSummary | null>(null);
 
   if (profiles.length === 0) {
     return (
-      <EmptyState title="No providers yet">
-        Add a provider to point {agentSummary?.displayName ?? "your agent"} at an endpoint you
-        choose.
+      <EmptyState title={t("providers.empty")}>
+        {t("providers.emptyBody", {
+          agent: agentSummary?.displayName ?? t("providers.yourAgent"),
+        })}
       </EmptyState>
     );
   }
@@ -252,7 +245,7 @@ function ProfileList({
           onDeleted={async () => {
             setConfirmDelete(null);
             onChanged();
-            notify("success", "Provider deleted.");
+            notify("success", t("toast.providerDeleted"));
           }}
         />
       )}
@@ -291,7 +284,7 @@ function ProfileRow({
   onRequestDelete: () => void;
   onChanged: () => void;
 }) {
-  const { agents } = useApp();
+  const { t, agents } = useApp();
   const testAction = useAction();
   const activateAction = useAction();
   const [outcome, setOutcome] = useState<TestOutcome | null>(null);
@@ -308,7 +301,7 @@ function ProfileRow({
    *
    * The `await onChanged()` is the fix for a real bug, and the ordering is the
    * whole point. The badge above reads `profile.compatibility`, which comes from
-   * the `profiles` array in context — not from the test result. Writing the result
+   * the `profiles` array in context, not from the test result. Writing the result
    * to local state therefore updated the panel and the badge disagreed, so a run
    * that reported 7/7 still showed "Not tested" and left Activate disabled until
    * something unrelated happened to reload profiles, which is why the badge
@@ -359,7 +352,12 @@ function ProfileRow({
           const result = await call("activate_profile", { id: profile.id, agent });
           return result;
         },
-        { success: `Activated ${profile.name} for ${agentSummary?.displayName}.` },
+        {
+          success: t("toast.activated", {
+            name: profile.name,
+            agent: agentSummary?.displayName ?? t("providers.yourAgent"),
+          }),
+        },
       )
       .then(onChanged);
 
@@ -369,17 +367,20 @@ function ProfileRow({
         <div className="list-row__title">
           {profile.name}
           <Badge tone={statusTone(record?.status)} dot>
-            {gate.label}
+            {t(gate.label)}
           </Badge>
-          {isActive && <Badge tone="info">Active</Badge>}
-          {!profile.hasSecret && <Badge tone="bad">No API key</Badge>}
+          {isActive && <Badge tone="info">{t("action.active")}</Badge>}
+          {!profile.hasSecret && <Badge tone="bad">{t("providers.noKey")}</Badge>}
         </div>
         <div className="list-row__sub mono">{profile.baseUrl}</div>
         <div className="list-row__sub">
-          Model <span className="mono">{profile.model}</span>
-          {record?.testedAt && <> · tested {relativeTime(record.testedAt)}</>}
-          {" · targets "}
-          {profile.targets.length > 0 ? profile.targets.join(", ") : "nothing"}
+          {t("providers.model")} <span className="mono">{profile.model}</span>
+          {record?.testedAt && (
+            <> · {t("providers.tested", { when: relativeTime(record.testedAt) })}</>
+          )}
+          {" · "}
+          {t("providers.targets")}{" "}
+          {profile.targets.length > 0 ? profile.targets.join(", ") : t("providers.nothing")}
         </div>
 
         {outcome && outcome.profileId === profile.id && (
@@ -394,9 +395,12 @@ function ProfileRow({
           size="sm"
           onClick={runTest}
           busy={testAction.busy}
-          aria-label={`Test ${profile.name} against ${agentSummary?.displayName}`}
+          aria-label={t("providers.testAria", {
+            name: profile.name,
+            agent: agentSummary?.displayName ?? t("providers.yourAgent"),
+          })}
         >
-          Test
+          {t("action.test")}
         </Button>
         <Button
           size="sm"
@@ -406,28 +410,28 @@ function ProfileRow({
           disabled={!gate.canActivate || isActive}
           // Comes from the same gate the badge uses, so the tooltip cannot claim
           // the provider needs testing while the badge already says Compatible.
-          title={gate.blockedReason}
+          title={gate.blockedReason ? t(gate.blockedReason) : undefined}
         >
-          {isActive ? "Active" : "Activate"}
+          {isActive ? t("action.active") : t("action.activate")}
         </Button>
         <Button size="sm" variant="ghost" onClick={onEdit}>
-          Edit
+          {t("action.edit")}
         </Button>
         <Button
           size="sm"
           variant="ghost"
           onClick={onDuplicate}
-          aria-label={`Duplicate ${profile.name}`}
+          aria-label={t("providers.duplicateAria", { name: profile.name })}
         >
-          Duplicate
+          {t("action.duplicate")}
         </Button>
         <Button
           size="sm"
           variant="ghost"
           onClick={onRequestDelete}
-          aria-label={`Delete ${profile.name}`}
+          aria-label={t("providers.deleteAria", { name: profile.name })}
         >
-          Delete
+          {t("action.delete")}
         </Button>
       </div>
     </div>
@@ -444,6 +448,7 @@ function DeleteProfileDialog({
   onClose: () => void;
   onDeleted: () => void;
 }) {
+  const { t } = useApp();
   const [impact, setImpact] = useState<
     { activeFor: AgentId[]; requiresDecision: boolean } | null | "loading"
   >("loading");
@@ -464,12 +469,14 @@ function DeleteProfileDialog({
       .catch((err: unknown) => {
         if (!cancelled) setImpact(null);
         const api = err as { message?: string };
-        setError(api.message ?? "Could not check whether this provider is active.");
+        setError(api.message ?? t("delete.impactFailed"));
       });
     return () => {
       cancelled = true;
     };
-  }, [profile.id]);
+    // `t` is a dependency because the failure fallback above is a translated
+    // message; re-reading the impact when the language changes is harmless.
+  }, [profile.id, t]);
 
   const deleteNow = (force: boolean) =>
     void action.run(
@@ -491,29 +498,25 @@ function DeleteProfileDialog({
 
   return (
     <Modal
-      title={`Delete ${profile.name}?`}
+      title={t("delete.title", { name: profile.name })}
       onClose={onClose}
       footer={
         requiresDecision ? (
           <>
             <Button variant="ghost" onClick={onClose}>
-              Cancel
+              {t("action.cancel")}
             </Button>
-            <Button
-              variant="secondary"
-              onClick={onClose}
-              title="Choose another provider or restore the default configuration first."
-            >
-              Keep it — let me switch first
+            <Button variant="secondary" onClick={onClose} title={t("delete.switchFirstTitle")}>
+              {t("delete.keepAndSwitch")}
             </Button>
             <Button variant="danger" onClick={() => deleteNow(true)} busy={action.busy}>
-              Delete anyway
+              {t("delete.anyway")}
             </Button>
           </>
         ) : (
           <>
             <Button variant="ghost" onClick={onClose}>
-              Cancel
+              {t("action.cancel")}
             </Button>
             <Button
               variant="danger"
@@ -521,31 +524,29 @@ function DeleteProfileDialog({
               busy={action.busy}
               disabled={impact === "loading"}
             >
-              Delete provider
+              {t("delete.confirm")}
             </Button>
           </>
         )
       }
     >
       {requiresDecision ? (
-        <Banner tone="warn" title="This provider is currently active">
-          {impactDetail && impactDetail.activeFor.length > 0
-            ? impactDetail.activeFor
-                .map((item) => (item === "codex" ? "Codex" : "Claude Code"))
-                .join(" and ")
-            : "An agent"}{" "}
-          is using {profile.name}. Deleting it now would leave that agent pointed at a configuration
-          Eclyzer Bridge no longer manages.
+        <Banner tone="warn" title={t("delete.activeTitle")}>
+          {t("delete.activeBody", {
+            agent:
+              impactDetail && impactDetail.activeFor.length > 0
+                ? impactDetail.activeFor
+                    .map((item) => (item === "codex" ? "Codex" : "Claude Code"))
+                    .join(t("delete.agentJoin"))
+                : t("delete.anAgent"),
+            name: profile.name,
+          })}
           <br />
           <br />
-          The safer order is: activate another provider, or restore the default configuration, and
-          then delete this one.
+          {t("delete.saferOrder")}
         </Banner>
       ) : (
-        <p className="muted small">
-          The stored API key for this provider is deleted with it. Your agent configuration is not
-          changed by deleting a provider.
-        </p>
+        <p className="muted small">{t("delete.body")}</p>
       )}
 
       {error && (
@@ -623,7 +624,7 @@ function ProfileEditor({
   onSaved: () => void | Promise<void>;
   notify: (tone: "success" | "error" | "info", title: string, text?: string) => void;
 }) {
-  const { settings, saveSettings } = useApp();
+  const { t, settings, saveSettings } = useApp();
   const [tab, setTab] = useState<EditorTab>("general");
   const [state, setState] = useState<EditorState>(() =>
     profile ? editorFrom(profile) : blankEditor(defaultAgent),
@@ -657,27 +658,27 @@ function ProfileEditor({
     const next: Record<string, string> = {};
 
     if (!state.name.trim()) {
-      next.name = "Give this provider a name you will recognize.";
+      next.name = t("editor.errorName");
     }
     if (!state.providerName.trim()) {
-      next.providerName = "Enter the provider name.";
+      next.providerName = t("editor.errorProviderName");
     }
     if (!state.baseUrl.trim()) {
-      next.baseUrl = "Enter the endpoint URL.";
+      next.baseUrl = t("editor.errorBaseUrl");
     } else if (!/^https?:\/\//i.test(state.baseUrl.trim())) {
-      next.baseUrl = "The URL must start with http:// or https://.";
+      next.baseUrl = t("editor.errorBaseUrlScheme");
     }
     if (!state.model.trim()) {
-      next.model = "Enter the model ID exactly as your provider expects it.";
+      next.model = t("editor.errorModel");
     }
     if (state.targets.length === 0) {
-      next.targets = "Choose at least one agent.";
+      next.targets = t("editor.errorTargets");
     }
     if (!isEditing && !state.apiKey.trim() && !state.clearApiKey) {
-      next.apiKey = "Enter the API key for this provider.";
+      next.apiKey = t("editor.errorApiKey");
     } else if (state.apiKey.trim() && state.apiKey.trim().length < 8) {
       // A suspiciously short key is almost always a partial paste.
-      next.apiKey = "That key looks too short. Check that you pasted all of it.";
+      next.apiKey = t("editor.errorApiKeyShort");
     }
 
     setErrors(next);
@@ -687,10 +688,7 @@ function ProfileEditor({
     }
     // Plain-HTTP endpoints need explicit confirmation before anything is sent.
     if (wouldBeInsecure(state) && !state.allowInsecure) {
-      setErrors({
-        baseUrl:
-          "This endpoint uses plain HTTP. Tick the confirmation below, or use an https:// URL.",
-      });
+      setErrors({ baseUrl: t("editor.errorInsecure") });
       setTab("general");
       return false;
     }
@@ -730,8 +728,8 @@ function ProfileEditor({
         await onSaved();
         notify(
           "success",
-          isEditing ? "Provider updated." : "Provider added.",
-          result.secretUpdated ? "The API key was saved securely." : undefined,
+          isEditing ? t("toast.providerUpdated") : t("toast.providerAdded"),
+          result.secretUpdated ? t("toast.keySaved") : undefined,
         );
         return result;
       },
@@ -760,21 +758,25 @@ function ProfileEditor({
 
   return (
     <Modal
-      title={isEditing ? `Edit ${profile?.name}` : "Add a provider"}
+      title={
+        isEditing
+          ? t("editor.editTitleName", { name: profile?.name ?? "" })
+          : t("editor.createTitle")
+      }
       onClose={onClose}
       wide
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
-            Cancel
+            {t("action.cancel")}
           </Button>
           <Button variant="primary" onClick={save} busy={action.busy}>
-            {isEditing ? "Save changes" : "Add provider"}
+            {isEditing ? t("editor.saveChanges") : t("providers.add")}
           </Button>
         </>
       }
     >
-      <div className="tabs" role="tablist" aria-label="Provider settings">
+      <div className="tabs" role="tablist" aria-label={t("editor.tabsAria")}>
         <button
           role="tab"
           type="button"
@@ -782,7 +784,7 @@ function ProfileEditor({
           aria-selected={tab === "general"}
           onClick={() => setTab("general")}
         >
-          General
+          {t("editor.tabGeneral")}
         </button>
         <button
           role="tab"
@@ -791,17 +793,14 @@ function ProfileEditor({
           aria-selected={tab === "advanced"}
           onClick={() => setTab("advanced")}
         >
-          Advanced
+          {t("editor.tabAdvanced")}
         </button>
       </div>
 
       {tab === "general" ? (
         <>
           {!isEditing && templates.length > 0 && (
-            <Field
-              label="Start from a preset"
-              hint="Presets fill in a known endpoint and model. You can change everything afterwards."
-            >
+            <Field label={t("editor.presetLabel")} hint={t("editor.presetHint")}>
               <select
                 className="select"
                 defaultValue=""
@@ -809,7 +808,7 @@ function ProfileEditor({
                   if (event.target.value) applyTemplate(event.target.value);
                 }}
               >
-                <option value="">Choose a provider…</option>
+                <option value="">{t("editor.chooseProvider")}</option>
                 {templates.map((template) => (
                   <option key={template.id} value={template.id}>
                     {template.name}
@@ -819,23 +818,23 @@ function ProfileEditor({
             </Field>
           )}
 
-          <Field label="Profile name" htmlFor="p-name" required error={errors.name}>
+          <Field label={t("editor.profileName")} htmlFor="p-name" required error={errors.name}>
             <input
               id="p-name"
               className="input"
               value={state.name}
               onChange={(event) => patch({ name: event.target.value })}
-              placeholder="DeepSeek for work"
+              placeholder={t("editor.profileNamePlaceholder")}
               aria-invalid={errors.name ? true : undefined}
             />
           </Field>
 
           <Field
-            label="Provider name"
+            label={t("editor.providerName")}
             htmlFor="p-provider"
             required
             error={errors.providerName}
-            hint="Shown in your agent's configuration so you can tell providers apart."
+            hint={t("editor.providerNameHint")}
           >
             <input
               id="p-provider"
@@ -848,11 +847,11 @@ function ProfileEditor({
           </Field>
 
           <Field
-            label="Base URL"
+            label={t("editor.baseUrl")}
             htmlFor="p-url"
             required
             error={errors.baseUrl}
-            hint="The OpenAI-compatible or Anthropic-compatible API root. Do not include /chat/completions."
+            hint={t("editor.baseUrlHintApi")}
           >
             <input
               id="p-url"
@@ -866,11 +865,11 @@ function ProfileEditor({
           </Field>
 
           <Field
-            label="Model ID"
+            label={t("editor.model")}
             htmlFor="p-model"
             required
             error={errors.model}
-            hint="Passed to your agent exactly as written. It is never interpreted as a command."
+            hint={t("editor.modelHintExact")}
           >
             <input
               id="p-model"
@@ -884,16 +883,18 @@ function ProfileEditor({
           </Field>
 
           <Field
-            label="API key"
+            label={t("editor.apiKey")}
             htmlFor="p-key"
             required={!isEditing}
             error={errors.apiKey}
             hint={
               isEditing
                 ? profile?.hasSecret
-                  ? `A key is already stored (${profile.secretFingerprint ?? "stored"}). Leave this empty to keep it.`
-                  : "No key is stored yet. Enter one to activate this provider."
-                : "Encrypted with Windows DPAPI for your Windows account only, and never written to your config files or backups."
+                  ? t("editor.keyStored", {
+                      fingerprint: profile.secretFingerprint ?? t("editor.fingerprintStored"),
+                    })
+                  : t("editor.noKeyStored")
+                : t("editor.apiKeyHint")
             }
           >
             <input
@@ -902,7 +903,7 @@ function ProfileEditor({
               type="password"
               value={state.apiKey}
               onChange={(event) => patch({ apiKey: event.target.value, clearApiKey: false })}
-              placeholder={isEditing ? "Leave empty to keep the stored key" : "sk-…"}
+              placeholder={isEditing ? t("editor.apiKeyKeep") : "sk-…"}
               autoComplete="off"
               spellCheck={false}
               disabled={state.clearApiKey}
@@ -923,10 +924,8 @@ function ProfileEditor({
                 }
               />
               <span className="checkbox__text">
-                <span>Remove the stored API key</span>
-                <span className="checkbox__hint">
-                  The provider stays, but it cannot be activated until a new key is entered.
-                </span>
+                <span>{t("editor.clearKey")}</span>
+                <span className="checkbox__hint">{t("editor.clearKeyHint")}</span>
               </span>
             </label>
           )}
@@ -936,7 +935,7 @@ function ProfileEditor({
             aria-describedby={errors.targets ? "p-targets-error" : undefined}
           >
             <legend className="field__label" style={{ padding: 0, marginBottom: 8 }}>
-              Use this provider with
+              {t("editor.targets")}
             </legend>
             <div className="stack stack--tight">
               {agents.map((agent) => (
@@ -953,9 +952,7 @@ function ProfileEditor({
                   />
                   <span className="checkbox__text">
                     <span>{agent.displayName}</span>
-                    <span className="checkbox__hint">
-                      Codex and Claude Code speak different protocols. Each is tested separately.
-                    </span>
+                    <span className="checkbox__hint">{t("editor.targetsHintProtocols")}</span>
                   </span>
                 </label>
               ))}
@@ -969,9 +966,8 @@ function ProfileEditor({
 
           {insecure && (
             <div className="stack stack--tight">
-              <Banner tone="warn" title="Insecure Endpoint">
-                Your API key may be sent without encryption. The endpoint below uses plain HTTP and
-                is not on this machine.
+              <Banner tone="warn" title={t("editor.insecureTitle")}>
+                {t("editor.insecureBody")}
                 <br />
                 <code className="mono">{state.baseUrl}</code>
               </Banner>
@@ -987,10 +983,8 @@ function ProfileEditor({
                   }}
                 />
                 <span className="checkbox__text">
-                  <span>I understand, send my key over plain HTTP</span>
-                  <span className="checkbox__hint">
-                    Only do this for an endpoint you control on a trusted network.
-                  </span>
+                  <span>{t("editor.insecure")}</span>
+                  <span className="checkbox__hint">{t("editor.insecureHint")}</span>
                 </span>
               </label>
             </div>
@@ -1025,6 +1019,7 @@ function AdvancedEditor({
   patch: (changes: Partial<EditorState>) => void;
   onReset: () => void;
 }) {
+  const { t } = useApp();
   const [headerName, setHeaderName] = useState("");
   const [headerValue, setHeaderValue] = useState("");
 
@@ -1036,32 +1031,21 @@ function AdvancedEditor({
 
   return (
     <>
-      <p className="muted small">
-        These options exist for gateways that need extra headers or a different authentication
-        style. Most providers need none of them.
-      </p>
+      <p className="muted small">{t("editor.advancedBody")}</p>
 
-      <Field
-        label="Authentication style"
-        htmlFor="p-auth"
-        hint="Bearer sends Authorization: Bearer <key>. x-api-key matches the Anthropic convention."
-      >
+      <Field label={t("editor.authMode")} htmlFor="p-auth" hint={t("editor.authModeHint")}>
         <select
           id="p-auth"
           className="select"
           value={state.advanced.authMode ?? "bearer"}
           onChange={(event) => update({ authMode: event.target.value as AuthMode })}
         >
-          <option value="bearer">Authorization: Bearer</option>
-          <option value="x_api_key">x-api-key</option>
+          <option value="bearer">{t("editor.authModeBearer")}</option>
+          <option value="x_api_key">{t("editor.authModeXApiKey")}</option>
         </select>
       </Field>
 
-      <Field
-        label="Request timeout"
-        htmlFor="p-timeout"
-        hint="Milliseconds. Slow gateways may need longer; the default is 20000."
-      >
+      <Field label={t("editor.timeout")} htmlFor="p-timeout" hint={t("editor.timeoutHint")}>
         <input
           id="p-timeout"
           className="input"
@@ -1080,9 +1064,9 @@ function AdvancedEditor({
       </Field>
 
       <div className="stack stack--tight">
-        <div className="field__label">Extra headers</div>
+        <div className="field__label">{t("editor.headers")}</div>
         {headers.length === 0 ? (
-          <div className="field__hint">No extra headers.</div>
+          <div className="field__hint">{t("editor.noHeaders")}</div>
         ) : (
           <div className="list">
             {headers.map((header, index) => (
@@ -1090,7 +1074,7 @@ function AdvancedEditor({
                 <div className="list-row__main">
                   <div className="list-row__title mono">{header.name}</div>
                   <div className="list-row__sub mono">
-                    {header.value ? "•••••• (value hidden)" : "(empty)"}
+                    {header.value ? t("editor.valueHidden") : t("editor.emptyValue")}
                   </div>
                 </div>
                 <div className="list-row__actions">
@@ -1102,9 +1086,9 @@ function AdvancedEditor({
                         headers: headers.filter((_, i) => i !== index),
                       })
                     }
-                    aria-label={`Remove header ${header.name}`}
+                    aria-label={t("editor.removeHeaderAria", { name: header.name })}
                   >
-                    Remove
+                    {t("action.remove")}
                   </Button>
                 </div>
               </div>
@@ -1118,15 +1102,15 @@ function AdvancedEditor({
             value={headerName}
             onChange={(event) => setHeaderName(event.target.value)}
             placeholder="X-Custom-Header"
-            aria-label="Header name"
+            aria-label={t("editor.headerName")}
           />
           <input
             className="input mono"
             type="password"
             value={headerValue}
             onChange={(event) => setHeaderValue(event.target.value)}
-            placeholder="value"
-            aria-label="Header value"
+            placeholder={t("editor.headerValue")}
+            aria-label={t("editor.headerValueAria")}
             autoComplete="off"
           />
           <Button
@@ -1140,21 +1124,16 @@ function AdvancedEditor({
               setHeaderValue("");
             }}
           >
-            Add
+            {t("action.add")}
           </Button>
         </div>
-        <div className="field__hint">
-          Header values are stored in plain text in your profile and written into the agent's own
-          configuration file. Put your gateway credential in the API key field instead, where it is
-          sealed with Windows DPAPI. Authorization, x-api-key, and proxy-authorization cannot be
-          overridden here.
-        </div>
+        <div className="field__hint">{t("editor.headersHint")}</div>
       </div>
 
       <div className="stack stack--tight">
-        <div className="field__label">Query parameters</div>
+        <div className="field__label">{t("editor.queryParams")}</div>
         {queryParams.length === 0 ? (
-          <div className="field__hint">No extra query parameters.</div>
+          <div className="field__hint">{t("editor.noQueryParams")}</div>
         ) : (
           <div className="list">
             {queryParams.map((param, index) => (
@@ -1162,7 +1141,7 @@ function AdvancedEditor({
                 <div className="list-row__main">
                   <div className="list-row__title mono">{param.name}</div>
                   <div className="list-row__sub mono">
-                    {param.value ? "•••••• (value hidden)" : "(empty)"}
+                    {param.value ? t("editor.valueHidden") : t("editor.emptyValue")}
                   </div>
                 </div>
                 <div className="list-row__actions">
@@ -1174,9 +1153,9 @@ function AdvancedEditor({
                         queryParams: queryParams.filter((_, i) => i !== index),
                       })
                     }
-                    aria-label={`Remove parameter ${param.name}`}
+                    aria-label={t("editor.removeParamAria", { name: param.name })}
                   >
-                    Remove
+                    {t("action.remove")}
                   </Button>
                 </div>
               </div>
@@ -1186,33 +1165,33 @@ function AdvancedEditor({
       </div>
 
       <Field
-        label="Model alias"
+        label={t("editor.modelAliasLabel")}
         htmlFor="p-alias"
-        hint="Optional. Written to your agent as the model name when the provider expects a different ID than the one you test with."
+        hint={t("editor.modelAliasNote")}
       >
         <input
           id="p-alias"
           className="input mono"
           value={state.advanced.modelAlias ?? ""}
           onChange={(event) => update({ modelAlias: event.target.value || undefined })}
-          placeholder="same as model ID"
+          placeholder={t("editor.modelAliasPlaceholder")}
           spellCheck={false}
         />
       </Field>
 
-      <Field label="Notes" htmlFor="p-notes">
+      <Field label={t("editor.notes")} htmlFor="p-notes">
         <textarea
           id="p-notes"
           className="textarea"
           value={state.notes}
           onChange={(event) => patch({ notes: event.target.value })}
-          placeholder="Anything you want to remember about this provider."
+          placeholder={t("editor.notesPlaceholder")}
         />
       </Field>
 
       <div className="row">
         <Button variant="ghost" size="sm" onClick={onReset}>
-          Reset advanced options
+          {t("editor.reset")}
         </Button>
         <div className="spacer" />
         <Button
@@ -1220,11 +1199,11 @@ function AdvancedEditor({
           size="sm"
           onClick={() =>
             void copyToClipboard(
-              state.baseUrl ? `${state.baseUrl} · ${state.model}` : "No endpoint set",
+              state.baseUrl ? `${state.baseUrl} · ${state.model}` : t("editor.noEndpoint"),
             )
           }
         >
-          Copy endpoint and model
+          {t("editor.copyEndpoint")}
         </Button>
       </div>
     </>

@@ -361,7 +361,10 @@ mod tests {
 
         let file = store.load().expect("a minimal profile must load");
         let profile = &file.profiles[0];
-        assert!(profile.targets.is_empty(), "no targets means no agent selected");
+        assert!(
+            profile.targets.is_empty(),
+            "no targets means no agent selected"
+        );
         assert_eq!(profile.base_url, "https://example.com");
     }
 
@@ -380,7 +383,11 @@ mod tests {
         .unwrap();
 
         let file = store.load().expect("loads");
-        assert_eq!(file.profiles.len(), 1, "the profile survives an unknown field");
+        assert_eq!(
+            file.profiles.len(),
+            1,
+            "the profile survives an unknown field"
+        );
 
         // Re-saving must not be lossy for the fields this build understands.
         store.save(&file).expect("saves");
@@ -452,7 +459,10 @@ mod tests {
         assert_eq!(provider_a.model, "example-model");
         // The verified verdict and its evidence must come back intact: this is what
         // makes Activate usable on the next launch without a re-test.
-        let record = provider_a.compatibility.get(&AgentId::Claude).expect("the claude verdict persisted");
+        let record = provider_a
+            .compatibility
+            .get(&AgentId::Claude)
+            .expect("the claude verdict persisted");
         assert_eq!(record.status, CompatibilityStatus::Compatible);
         assert_eq!(record.latency_ms, Some(1959));
         assert!(record.streaming);
@@ -532,7 +542,9 @@ mod tests {
         )
         .unwrap();
 
-        let err = store.load().expect_err("an unreadable file must be reported");
+        let err = store
+            .load()
+            .expect_err("an unreadable file must be reported");
         assert_eq!(err.kind, crate::error::ErrorKind::ConfigInvalid);
     }
 

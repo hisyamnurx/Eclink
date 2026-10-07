@@ -11,6 +11,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Toasts } from "./components/Toasts";
 import { Banner, Button, ErrorState, LoadingState } from "./components/ui";
 import { call, hasBackend, type AgentId, type UpdateStatus } from "./lib/api";
+import type { MessageKey } from "./lib/i18n";
 import { Configure } from "./pages/Configure";
 import { History } from "./pages/History";
 import { Home } from "./pages/Home";
@@ -20,12 +21,18 @@ import { AppProvider, useApp } from "./state/AppContext";
 
 type Page = "home" | "configure" | "playground" | "history" | "settings";
 
-const NAV: Array<{ id: Page; label: string; icon: string }> = [
-  { id: "home", label: "Overview", icon: "◈" },
-  { id: "configure", label: "Providers", icon: "⚙" },
-  { id: "playground", label: "Playground", icon: "▶" },
-  { id: "history", label: "History", icon: "↺" },
-  { id: "settings", label: "Settings", icon: "☰" },
+/**
+ * The navigation items.
+ *
+ * Labels are message keys rather than strings, so the shell does not carry
+ * English and the nav follows the chosen language like everything else.
+ */
+const NAV: Array<{ id: Page; labelKey: MessageKey; icon: string }> = [
+  { id: "home", labelKey: "nav.overview", icon: "◈" },
+  { id: "configure", labelKey: "nav.providers", icon: "⚙" },
+  { id: "playground", labelKey: "nav.playground", icon: "▶" },
+  { id: "history", labelKey: "nav.history", icon: "↺" },
+  { id: "settings", labelKey: "nav.settings", icon: "☰" },
 ];
 
 export function App() {
@@ -38,7 +45,7 @@ export function App() {
 }
 
 function Shell() {
-  const { loading, loadError, reload, settings } = useApp();
+  const { loading, loadError, reload, settings, t } = useApp();
   const [page, setPage] = useState<Page>("home");
   // Set when the user navigates from a card that targets one agent, so the
   // destination opens on the right tab.
@@ -74,7 +81,7 @@ function Shell() {
     return (
       <div className="main">
         <div className="main__inner">
-          <LoadingState label="Starting Eclyzer Bridge…" />
+          <LoadingState label={t("settings.checking")} />
         </div>
       </div>
     );
@@ -92,7 +99,7 @@ function Shell() {
 
   return (
     <div className="app">
-      <nav className="sidebar" aria-label="Main">
+      <nav className="sidebar" aria-label={t("nav.overview")}>
         <div className="sidebar__brand">
           <img
             className="sidebar__logo"
@@ -104,7 +111,7 @@ function Shell() {
           />
           <div>
             <div className="sidebar__wordmark">Eclyzer Bridge</div>
-            <div className="sidebar__tagline">Local configuration bridge</div>
+            <div className="sidebar__tagline">{t("app.tagline")}</div>
           </div>
         </div>
 
@@ -120,14 +127,16 @@ function Shell() {
               <span className="nav__icon" aria-hidden="true">
                 {item.icon}
               </span>
-              {item.label}
+              {t(item.labelKey)}
             </button>
           ))}
         </div>
 
         <div className="sidebar__footer">
-          <span>Version {settings?.appVersion ?? "—"}</span>
-          <span>No telemetry</span>
+          <span>
+            {t("home.version")} {settings?.appVersion ?? "-"}
+          </span>
+          <span>{t("app.noTelemetry")}</span>
         </div>
       </nav>
 
@@ -160,7 +169,7 @@ function Shell() {
  * user needs to hear about every launch.
  */
 function UpdateNotice({ onOpenSettings }: { onOpenSettings: () => void }) {
-  const { settings } = useApp();
+  const { settings, t } = useApp();
   const [status, setStatus] = useState<UpdateStatus | null>(null);
   const [dismissed, setDismissed] = useState(false);
 
@@ -190,11 +199,11 @@ function UpdateNotice({ onOpenSettings }: { onOpenSettings: () => void }) {
     <div className="main__inner" style={{ paddingBottom: 0 }}>
       <Banner
         tone="info"
-        title={`Eclyzer Bridge ${status.version} is available`}
+        title={t("update.bannerTitle", { version: status.version ?? "" })}
         actions={
           <>
             <Button size="sm" variant="ghost" onClick={() => setDismissed(true)}>
-              Not now
+              {t("update.notNow")}
             </Button>
             <Button
               size="sm"
@@ -207,12 +216,12 @@ function UpdateNotice({ onOpenSettings }: { onOpenSettings: () => void }) {
                 onOpenSettings();
               }}
             >
-              Open Settings to install
+              {t("update.openSettings")}
             </Button>
           </>
         }
       >
-        You are running {status.currentVersion}. Open Settings to review and install it.
+        {t("update.bannerBody", { current: status.currentVersion ?? "" })}
       </Banner>
     </div>
   );

@@ -6,7 +6,7 @@
  *
  *   "The current testing environment is not configured to support act(...)"
  *
- * and — more importantly — state updates are not flushed deterministically, so a
+ * and - more importantly - state updates are not flushed deterministically, so a
  * hook test can appear to pass while never observing the update it asserts on.
  * Setting it here keeps every suite honest rather than only the ones that
  * remember to set it themselves.

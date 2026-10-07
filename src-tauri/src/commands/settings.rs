@@ -42,6 +42,9 @@ pub struct SettingsPatch {
     /// Written only when the user launches with "remember this folder" on.
     #[serde(default)]
     pub last_project_directory: Option<String>,
+    /// Interface language tag, e.g. `en` or `id`.
+    #[serde(default)]
+    pub language: Option<String>,
 }
 
 /// Read the current settings and environment facts.
@@ -134,7 +137,21 @@ fn apply_patch(settings: &mut AppSettings, patch: &SettingsPatch) {
             None
         };
     }
+    // The language is validated against the known set rather than stored as
+    // typed, so a typo cannot leave the UI with no dictionary and a blank screen.
+    if let Some(value) = patch.language.as_ref() {
+        let normalised = value.trim().to_ascii_lowercase();
+        if SUPPORTED_LANGUAGES.contains(&normalised.as_str()) {
+            settings.language = normalised;
+        }
+    }
 }
+
+/// Interface languages this build ships translations for.
+///
+/// Kept in the backend so a value written by any client is validated in one
+/// place; the frontend dictionary list must match it.
+pub const SUPPORTED_LANGUAGES: [&str; 2] = ["en", "id"];
 
 #[cfg(test)]
 mod tests {

@@ -66,10 +66,15 @@ pub async fn playground_send(
     }
     let target = crate::testing::pipeline::build_target(&profile, secret)?;
 
-    // Anthropic-shaped endpoints take /v1/messages; everything else that this
-    // app supports is OpenAI-compatible and takes /chat/completions.
-    let anthropic = agent == crate::adapters::AgentId::Claude;
-    Ok(crate::testing::playground::send(&target, &prompt, anthropic).await?)
+    // Each agent speaks exactly one API, and the Playground must use that one or it
+    // is validating a request the agent will never make. Codex requires the
+    // Responses API and has removed Chat Completions support entirely, so treating
+    // "not Claude" as Chat would send Codex profiles the wrong request.
+    let protocol = match agent {
+        crate::adapters::AgentId::Claude => crate::profiles::ApiProtocol::AnthropicMessages,
+        crate::adapters::AgentId::Codex => crate::profiles::ApiProtocol::OpenAiResponses,
+    };
+    Ok(crate::testing::playground::send(&target, &prompt, protocol).await?)
 }
 
 #[cfg(test)]

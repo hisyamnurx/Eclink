@@ -4,8 +4,8 @@
  * This exists because of a real finding: `capabilities/default.json` granted
  * `updater:default`, which expands to `allow-check`, `allow-download`,
  * `allow-install`, AND `allow-download-and-install`. The app never calls the
- * updater JS plugin — all update logic goes through the app's own Rust commands,
- * where a user gesture is required — so that grant exposed
+ * updater JS plugin - all update logic goes through the app's own Rust commands,
+ * where a user gesture is required - so that grant exposed
  * `plugin:updater|download_and_install` directly to the webview.
  *
  * The practical effect was that "updates are never silent" was enforced only by

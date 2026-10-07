@@ -2,8 +2,8 @@
  * Deriving which profile is currently active for an agent.
  *
  * This lives in its own module, as a pure function, because there was a real bug
- * here: the value was previously computed from cached *test results* — the first
- * profile that had ever passed a compatibility test for that agent — rather than
+ * here: the value was previously computed from cached *test results* - the first
+ * profile that had ever passed a compatibility test for that agent - rather than
  * from what the backend reports as applied. Those are different questions, and
  * the answer diverges the moment a user activates a second profile.
  *

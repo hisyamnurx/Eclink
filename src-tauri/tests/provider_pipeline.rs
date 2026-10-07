@@ -1128,6 +1128,104 @@ async fn a_rejected_key_is_still_reported_as_rejected_on_the_right_route() {
 }
 
 #[tokio::test]
+async fn the_playground_posts_to_the_route_each_agent_uses() {
+    // The Playground had the same defect the test pipeline did: it treated "not
+    // Claude" as Chat Completions, so a Codex profile was validated against a route
+    // and body shape Codex cannot use. Codex removed `wire_api = "chat"` entirely
+    // and builds its request from `url_for_path("/responses")`.
+    use eclyzer_bridge_lib::profiles::ApiProtocol;
+    use eclyzer_bridge_lib::testing::playground::send;
+
+    let server = MockServer::start(vec![
+        ("/v1/responses".into(), Response::json(200, OK_RESPONSES)),
+        ("/v1/messages".into(), Response::json(200, OK_MESSAGES)),
+        ("/v1/chat/completions".into(), Response::json(200, OK_CHAT)),
+    ]);
+
+    let target = ProbeTarget::new(
+        &server.base_url,
+        "test-model",
+        Secret::new("sk-test"),
+        AuthMode::Bearer,
+        Some(10_000),
+    )
+    .expect("target");
+
+    // Codex: the Responses route, and the reply is read with the Responses parser,
+    // which finds the text inside `output` items rather than `choices`. The Chat
+    // parser returned an empty string for this same body, which the caller reports
+    // as "the provider returned an empty reply" for a perfectly good response.
+    let codex = send(&target, "hello", ApiProtocol::OpenAiResponses)
+        .await
+        .expect("the playground call succeeds");
+    assert_eq!(codex.text, "ready");
+
+    // Claude Code: the Messages route.
+    let claude = send(&target, "hello", ApiProtocol::AnthropicMessages)
+        .await
+        .expect("the playground call succeeds");
+    assert_eq!(claude.text, "ready");
+
+    let paths: Vec<String> = server.requests().iter().map(|r| r.path.clone()).collect();
+    assert!(
+        paths.iter().any(|p| p == "/v1/responses"),
+        "Codex did not use the Responses route: {paths:?}"
+    );
+    assert!(
+        paths.iter().any(|p| p == "/v1/messages"),
+        "Claude Code did not use the Messages route: {paths:?}"
+    );
+    // Chat Completions serves neither agent, so it must never be requested.
+    assert!(
+        !paths.iter().any(|p| p.contains("chat/completions")),
+        "the Playground used Chat Completions, which Codex removed support for and \
+         Claude Code never used: {paths:?}"
+    );
+    assert!(
+        !paths.iter().any(|p| p.contains("/v1/v1/")),
+        "a duplicated version was requested: {paths:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_playground_reports_a_provider_error_rather_than_an_empty_reply() {
+    // A route the provider does not serve must produce a message naming the
+    // endpoint's own response, not "the provider returned an empty reply", which
+    // sends the user looking at the model instead of at the API shape.
+    use eclyzer_bridge_lib::profiles::ApiProtocol;
+    use eclyzer_bridge_lib::testing::playground::send;
+
+    let server = MockServer::start(vec![(
+        "/v1/responses".into(),
+        Response::json(404, r#"{"error":"Route POST /v1/responses not found"}"#),
+    )]);
+    let target = ProbeTarget::new(
+        &server.base_url,
+        "test-model",
+        Secret::new("sk-test"),
+        AuthMode::Bearer,
+        Some(10_000),
+    )
+    .expect("target");
+
+    let err = send(&target, "hello", ApiProtocol::OpenAiResponses)
+        .await
+        .expect_err("a 404 must be an error");
+    let text = format!("{} {}", err.message, err.hint.clone().unwrap_or_default());
+    assert!(
+        !text.to_lowercase().contains("empty reply"),
+        "a missing route was reported as an empty reply: {text}"
+    );
+    // The endpoint's own words must survive into the error somewhere the user can
+    // read them.
+    let details = err.details.clone().unwrap_or_default();
+    assert!(
+        text.contains("not found") || details.contains("not found"),
+        "the endpoint's own explanation was dropped: {text} / {details}"
+    );
+}
+
+#[tokio::test]
 async fn protocol_probing_does_not_leak_the_key_into_the_capability_report() {
     // The report is shown in the UI and can be copied into a diagnostics bundle.
     let server = single_protocol_server("/v1/messages", OK_MESSAGES);

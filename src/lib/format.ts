@@ -51,14 +51,16 @@ export function absoluteTime(iso: string | undefined): string {
 
 /** Format a latency in milliseconds for display. */
 export function latency(ms: number | undefined): string {
-  if (ms === undefined || ms === null || Number.isNaN(ms)) return "—";
+  // A plain hyphen, not an em-dash: the UI uses short dashes throughout, and an
+  // em-dash here was the only place a long one appeared.
+  if (ms === undefined || ms === null || Number.isNaN(ms)) return "-";
   if (ms < 1000) return `${Math.round(ms)} ms`;
   return `${(ms / 1000).toFixed(1)} s`;
 }
 
 /** Format a byte count for display. */
 export function bytes(count: number): string {
-  if (!Number.isFinite(count) || count < 0) return "—";
+  if (!Number.isFinite(count) || count < 0) return "-";
   if (count < 1024) return `${count} B`;
   if (count < 1024 * 1024) return `${(count / 1024).toFixed(1)} KB`;
   return `${(count / (1024 * 1024)).toFixed(1)} MB`;

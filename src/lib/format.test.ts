@@ -71,9 +71,21 @@ describe("latency", () => {
     expect(latency(12_340)).toBe("12.3 s");
   });
 
-  it("shows a dash rather than NaN when there is no measurement", () => {
-    expect(latency(undefined)).toBe("—");
-    expect(latency(Number.NaN)).toBe("—");
+  it("shows a short dash rather than NaN when there is no measurement", () => {
+    // A plain hyphen, not an em-dash. The interface uses short dashes throughout,
+    // and an em-dash here was the only long one in the product; it also rendered as
+    // mojibake once, because the file was rewritten through a non-UTF-8 round trip.
+    expect(latency(undefined)).toBe("-");
+    expect(latency(Number.NaN)).toBe("-");
+  });
+
+  it("never returns an em-dash or en-dash", () => {
+    // Asserted as a rule rather than only at the two call sites above, so a future
+    // placeholder cannot reintroduce one.
+    const longDashes = /[\u2013\u2014]/;
+    for (const value of [undefined, Number.NaN, 0, 1, 999, 1000, 12_345]) {
+      expect(latency(value), `latency(${String(value)})`).not.toMatch(longDashes);
+    }
   });
 });
 
@@ -85,8 +97,15 @@ describe("bytes", () => {
   });
 
   it("does not render a negative or impossible size", () => {
-    expect(bytes(-1)).toBe("—");
-    expect(bytes(Number.POSITIVE_INFINITY)).toBe("—");
+    expect(bytes(-1)).toBe("-");
+    expect(bytes(Number.POSITIVE_INFINITY)).toBe("-");
+  });
+
+  it("never returns an em-dash or en-dash", () => {
+    const longDashes = /[\u2013\u2014]/;
+    for (const value of [-1, 0, 1, 1024, 1024 * 1024, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(bytes(value), `bytes(${String(value)})`).not.toMatch(longDashes);
+    }
   });
 });
 

@@ -15,11 +15,11 @@ import { latency } from "../lib/format";
 import { useApp } from "../state/AppContext";
 
 export function Playground({ initialAgent }: { initialAgent?: AgentId }) {
-  const { agents, profiles, loading } = useApp();
+  const { agents, profiles, loading, t } = useApp();
   const installed = agents.filter((agent) => agent.installed);
   const [agent, setAgent] = useState<AgentId>(initialAgent ?? installed[0]?.agent ?? "codex");
 
-  if (loading) return <LoadingState label="Loading providers…" />;
+  if (loading) return <LoadingState label={t("playground.sending")} />;
 
   const usable = profiles.filter((profile) => profile.targets.includes(agent) && profile.hasSecret);
 
@@ -27,16 +27,13 @@ export function Playground({ initialAgent }: { initialAgent?: AgentId }) {
     <div className="main__inner">
       <header className="page-header">
         <div className="page-header__text">
-          <h1>Playground</h1>
-          <p className="page-header__subtitle">
-            Send one message to a provider and see the real response. This talks directly to your
-            provider using your key.
-          </p>
+          <h1>{t("playground.title")}</h1>
+          <p className="page-header__subtitle">{t("playground.subtitle")}</p>
         </div>
       </header>
 
       {installed.length > 1 && (
-        <div className="tabs" role="tablist" aria-label="Coding agent">
+        <div className="tabs" role="tablist" aria-label={t("playground.agentTabsAria")}>
           {installed.map((item) => (
             <button
               key={item.agent}
@@ -52,24 +49,32 @@ export function Playground({ initialAgent }: { initialAgent?: AgentId }) {
         </div>
       )}
 
-      <Banner tone="info" title="This request is billable">
-        The message below is sent to your provider and may count towards your usage or cost. Nothing
-        is sent unless you press Send.
+      <Banner tone="info" title={t("playground.billableTitle")}>
+        {t("playground.billableBody")}
       </Banner>
 
       {usable.length === 0 ? (
-        <EmptyState title="No usable provider for this agent">
-          Add a provider for {agent === "codex" ? "Codex" : "Claude Code"} and enter an API key,
-          then come back.
+        <EmptyState title={t("playground.noUsableProvider")}>
+          {t("playground.noUsableProviderBody", {
+            agent: agent === "codex" ? "Codex" : "Claude Code",
+          })}
         </EmptyState>
       ) : (
-        <PlaygroundForm profiles={usable} />
+        <PlaygroundForm profiles={usable} agent={agent} />
       )}
     </div>
   );
 }
 
-function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
+function PlaygroundForm({
+  profiles,
+  agent,
+}: {
+  profiles: ProfileSummary[];
+  /** The tab the user chose. Sent with the request so the right API is used. */
+  agent: AgentId;
+}) {
+  const { t } = useApp();
   // The caller guarantees a non-empty list, so the first profile is present.
   const [profileId, setProfileId] = useState(profiles[0]!.id);
   const [prompt, setPrompt] = useState("");
@@ -87,11 +92,16 @@ function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
       const response = await call("playground_send", {
         id: profileId,
         prompt: prompt.trim(),
+        // The selected tab decides which API is used, so it has to be sent. Without
+        // it the backend fell back to the profile's first target, which meant
+        // choosing the Claude Code tab for a provider that also targets Codex sent
+        // a Codex-shaped request anyway.
+        agent,
       });
       setResult(response);
     } catch (raw) {
       const api = raw as { message?: string; hint?: string };
-      setError([api.message ?? "The request failed.", api.hint].filter(Boolean).join(" "));
+      setError([api.message ?? t("playground.requestFailed"), api.hint].filter(Boolean).join(" "));
     } finally {
       setBusy(false);
     }
@@ -99,9 +109,9 @@ function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
 
   return (
     <section className="card" aria-labelledby="playground-heading">
-      <h2 id="playground-heading">Send a message</h2>
+      <h2 id="playground-heading">{t("playground.formTitle")}</h2>
 
-      <Field label="Provider" htmlFor="pg-provider">
+      <Field label={t("playground.provider")} htmlFor="pg-provider">
         <select
           id="pg-provider"
           className="select"
@@ -114,7 +124,7 @@ function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
         >
           {profiles.map((profile) => (
             <option key={profile.id} value={profile.id}>
-              {profile.name} — {profile.model}
+              {profile.name} - {profile.model}
             </option>
           ))}
         </select>
@@ -123,23 +133,19 @@ function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
       {selected && (
         <Meta
           items={[
-            { key: "Endpoint", value: selected.baseUrl, mono: true },
-            { key: "Model", value: selected.model, mono: true },
+            { key: t("playground.endpoint"), value: selected.baseUrl, mono: true },
+            { key: t("playground.model"), value: selected.model, mono: true },
           ]}
         />
       )}
 
-      <Field
-        label="Message"
-        htmlFor="pg-prompt"
-        hint="One turn only. The provider's reply is shown exactly as it arrives."
-      >
+      <Field label={t("playground.prompt")} htmlFor="pg-prompt" hint={t("playground.promptHint")}>
         <textarea
           id="pg-prompt"
           className="textarea"
           value={prompt}
           onChange={(event) => setPrompt(event.target.value)}
-          placeholder="Reply with the single word: ready"
+          placeholder={t("playground.askShort")}
           rows={4}
           maxLength={8000}
           disabled={busy}
@@ -153,13 +159,13 @@ function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
           busy={busy}
           disabled={!prompt.trim() || busy}
         >
-          Send
+          {t("playground.send")}
         </Button>
-        {busy && <span className="small muted">Waiting for the provider…</span>}
+        {busy && <span className="small muted">{t("playground.waiting")}</span>}
       </div>
 
       {error && (
-        <Banner tone="bad" title="The request failed">
+        <Banner tone="bad" title={t("playground.requestFailed")}>
           {error}
         </Banner>
       )}
@@ -168,14 +174,21 @@ function PlaygroundForm({ profiles }: { profiles: ProfileSummary[] }) {
         <div className="stack stack--tight">
           <div className="row row--wrap">
             <Badge tone="ok" dot>
-              Response received
+              {t("playground.responseReceived")}
             </Badge>
             <span className="small dim mono">{latency(result.latencyMs)}</span>
             <span className="small dim mono">{result.model}</span>
-            {result.streaming && <Badge tone="info">Streamed</Badge>}
+            {/* The playground sends a buffered request, so the backend always
+                reports `streaming: false`. Badging that as "Streamed" would be a
+                lie about what the user's key paid for, so the label is only
+                rendered when the value is actually true. */}
+            {result.streaming && <Badge tone="info">{t("playground.streamed")}</Badge>}
             {result.promptTokens !== undefined && (
               <span className="small dim">
-                {result.promptTokens} in / {result.completionTokens ?? "?"} out tokens
+                {t("playground.tokensInline", {
+                  input: result.promptTokens,
+                  output: result.completionTokens ?? "?",
+                })}
               </span>
             )}
           </div>

@@ -21,10 +21,10 @@
   --bg-charcoal: #16171a;
   --bg-graphite: #1d1f23;
 
-  /* Text — ratios are against --bg-base (#0a0a0b) */
-  --text-ink: #ececee; /* ~16.5:1 — body and headings */
-  --text-muted: #9a9ea6; /* ~7.4:1 — secondary text, still AA at body size */
-  --text-dim: #6f737b; /* ~4.1:1 — 14px+ only, for metadata */
+  /* Text - ratios are against --bg-base (#0a0a0b) */
+  --text-ink: #ececee; /* ~16.5:1 - body and headings */
+  --text-muted: #9a9ea6; /* ~7.4:1 - secondary text, still AA at body size */
+  --text-dim: #6f737b; /* ~4.1:1 - 14px+ only, for metadata */
 
   /* Lines */
   --border: rgba(255, 255, 255, 0.08);

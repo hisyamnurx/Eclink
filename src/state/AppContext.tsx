@@ -26,6 +26,14 @@ import {
   type SettingsView,
 } from "../lib/api";
 import { findActiveProfile } from "../lib/active";
+import {
+  dictionaryFor,
+  isLanguage,
+  translate,
+  type Interpolations,
+  type Language,
+  type MessageKey,
+} from "../lib/i18n";
 
 /* --- Toasts ----------------------------------------------------------- */
 
@@ -48,6 +56,14 @@ interface AppContextValue {
   /* derived */
   firstRun: boolean;
   activeProfileFor: (agent: string) => ProfileSummary | undefined;
+
+  /* localisation */
+  /** The active language. */
+  language: Language;
+  /** Translate a key, substituting any `{placeholders}` in `values`. */
+  t: (key: MessageKey, values?: Interpolations) => string;
+  /** Switch language; persists immediately. */
+  setLanguage: (language: Language) => Promise<void>;
 
   /* actions */
   reload: () => Promise<void>;
@@ -196,6 +212,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // trap the user in onboarding, so a missing settings object counts as done.
   const firstRun = settings ? !settings.firstRunComplete : false;
 
+  /**
+   * The active language.
+   *
+   * Read from persisted settings, so the choice survives a restart. An unknown
+   * or missing value falls back to English rather than rendering nothing, which
+   * matters because the value can come from a file an older version wrote.
+   */
+  const language: Language = isLanguage(settings?.language) ? settings.language : "en";
+  const dictionary = useMemo(() => dictionaryFor(language), [language]);
+
+  const t = useCallback(
+    (key: MessageKey, values?: Interpolations) =>
+      translate(dictionary, key, values),
+    [dictionary],
+  );
+
+  const setLanguage = useCallback(
+    async (next: Language) => {
+      // Applied optimistically through the shared settings state so the UI
+      // switches in the same tick, then persisted. A failed write leaves the
+      // previous choice in the file, which the next load will read.
+      await saveSettings({ language: next });
+    },
+    [saveSettings],
+  );
+
   const value = useMemo<AppContextValue>(
     () => ({
       agents,
@@ -210,6 +252,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       reloadProfiles,
       refreshAgent,
       saveSettings,
+      language,
+      t,
+      setLanguage,
       toasts,
       notify,
       dismissToast,
@@ -227,6 +272,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       reloadProfiles,
       refreshAgent,
       saveSettings,
+      language,
+      t,
+      setLanguage,
       toasts,
       notify,
       dismissToast,

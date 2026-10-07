@@ -2,8 +2,8 @@
  * Tests for active-profile derivation.
  *
  * These exist because of a real bug: the "which profile is active" question was
- * answered from cached compatibility test results — the first profile that had
- * ever passed a test for an agent — instead of from what the backend reports as
+ * answered from cached compatibility test results - the first profile that had
+ * ever passed a test for an agent - instead of from what the backend reports as
  * applied. The two agree only until a user activates a second profile.
  *
  * The property that matters is that the answer comes from `activeKind` /

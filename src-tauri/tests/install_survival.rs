@@ -288,7 +288,11 @@ fn the_icon_set_covers_every_size_windows_asks_for() {
     let bytes = std::fs::read(&ico_path).expect("icon.ico is readable");
     assert!(bytes.len() > 1024, "icon.ico is implausibly small");
     // Every Windows .ico opens with a 6-byte header: reserved(2), type(2), count(2).
-    assert_eq!(&bytes[0..2], &[0, 0], "icon.ico is not an icon (bad reserved field)");
+    assert_eq!(
+        &bytes[0..2],
+        &[0, 0],
+        "icon.ico is not an icon (bad reserved field)"
+    );
     assert_eq!(&bytes[2..4], &[1, 0], "icon.ico is a cursor, not an icon");
     let image_count = u16::from_le_bytes([bytes[4], bytes[5]]) as usize;
     assert!(
@@ -315,8 +319,8 @@ fn the_bundle_references_an_installer_icon_and_the_window_icon_set() {
     // omits the .ico, means Windows falls back to a generic icon on the shortcut
     // and in Add/Remove Programs.
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let config = std::fs::read_to_string(root.join("tauri.conf.json"))
-        .expect("tauri.conf.json is readable");
+    let config =
+        std::fs::read_to_string(root.join("tauri.conf.json")).expect("tauri.conf.json is readable");
     let parsed: serde_json::Value =
         serde_json::from_str(&config).expect("tauri.conf.json is valid JSON");
 

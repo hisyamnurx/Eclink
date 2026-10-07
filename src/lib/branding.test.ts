@@ -2,7 +2,7 @@
  * Guards the application branding.
  *
  * The Tauri CLI ships a set of default icons, and it is easy to forget that a
- * build still points at them after a rebrand — the app then shows the Tauri logo
+ * build still points at them after a rebrand - the app then shows the Tauri logo
  * in the taskbar, Start Menu, and installer while the UI shows the real one.
  * `npx tauri icon` overwrites the whole set from a single source, so the way
  * this goes wrong is a stale file left behind, not a missing one.

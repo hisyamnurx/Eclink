@@ -268,6 +268,8 @@ export interface AppSettings {
   firstRunComplete: boolean;
   costNoticeSeen: boolean;
   insecureEndpointNoticeSeen: boolean;
+  /** Interface language tag. Defaults to `en` on an older settings file. */
+  language: string;
 }
 
 export interface SettingsView extends AppSettings {
@@ -290,6 +292,8 @@ export interface SettingsPatch {
   insecureEndpointNoticeSeen?: boolean;
   /** Written only as a side effect of launching with "remember" enabled. */
   lastProjectDirectory?: string;
+  /** Interface language tag, validated against the supported set. */
+  language?: string;
 }
 
 export interface DiagnosticsBundle {
