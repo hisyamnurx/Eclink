@@ -8,7 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Eclink is an independent open-source project and is not affiliated
 > with, endorsed by, or sponsored by OpenAI or Anthropic.**
 
-## [Unreleased]
+## [0.2.1] - 2026-10-20
+
+A patch release containing the Claude Code base-URL fix and the CI fixes. No
+feature was added, and no profile, API key, or backup format changed.
 
 ### Fixed
 
@@ -35,6 +38,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   while the helper declared as a bundle resource is missing. Both workflows moved
   to `actions/checkout@v5` and `actions/setup-node@v5` on Node 24, since the
   runners now force Node 20 actions onto Node 24.
+- **The helper round-trip tests** looked for the pre-rebrand
+  `eclyzer-bridge-helper.exe` only, so they failed on a clean build once the
+  binary was renamed to `eclink-helper.exe`. They now try the current name first
+  and keep the legacy name as a fallback.
+
+### Known limitations
+
+- **One provider still rejects Claude Code's full request.** After the base-URL
+  fix above, ModelVIP (`https://modelrouter.id/v1`) answers Claude Code's complete
+  agent request — roughly 58 KB, carrying `output_config.effort`, adaptive
+  `thinking`, `context_management`, and 14 deferred tools — with HTTP 503 in about
+  60–120 ms. The same credentials, model, and endpoint serve a minimal
+  `/v1/messages` request in the same second, so the endpoint is correct and
+  reachable. The unsupported field was not isolated after extensive bisection
+  (each field, the total size, and the header set pass on their own). This is a
+  provider-side limitation. Eclink does not rewrite, strip, or translate Claude
+  Code's request to work around it, because that would silently change what the
+  agent asks for. Streaming, tool use, and token accounting were all verified
+  working against this endpoint.
+- **The provider token lives in plaintext in Claude Code's `settings.json`.** That
+  is Claude Code's own storage; Eclink writes what the agent reads. Within Eclink
+  the token is encrypted at rest with DPAPI
+  (`%LOCALAPPDATA%\EclyzerBridge\secrets.dat`), is redacted from log files, and is
+  blanked (`ANTHROPIC_AUTH_TOKEN: ""`) in every backup snapshot and captured
+  "original" copy, so Eclink never keeps a second readable copy. The file Eclink
+  activates is the one Claude Code itself reads, so its contents are exactly as
+  protected as that file already was.
 
 ## [0.2.0] - 2026-10-20
 
