@@ -29,11 +29,11 @@ jobs:
     name: Frontend
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: "24"
           cache: npm
 
       - name: Install dependencies
@@ -58,7 +58,7 @@ jobs:
     name: Rust
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -72,13 +72,20 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+      - name: Build the helper
+        # This step must run BEFORE Clippy and Test, and the order is not a
+        # preference. `src-tauri/tauri.conf.json` declares
+        # `../target/release/eclink-helper.exe` as a bundle resource, and
+        # `tauri_build::build()` in the eclink build script refuses to compile when
+        # a declared resource is missing. Running Clippy first therefore failed
+        # with `resource path '..\target\release\eclink-helper.exe' doesn't exist`
+        # — the same error the CI "Clippy" step hit on 2026-10-20 — because the
+        # release helper had not been built yet. Building it first also gives the
+        # integration tests the binary they execute.
+        run: cargo build --release -p eclink-helper
+
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Build the helper
-        # The helper is a build artefact the integration tests depend on, and it
-        # is also a declared Tauri resource.
-        run: cargo build --release -p eclink-helper
 
       - name: Test
         run: cargo test --workspace
@@ -88,11 +95,11 @@ jobs:
     runs-on: windows-latest
     needs: [frontend, rust]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: "24"
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable

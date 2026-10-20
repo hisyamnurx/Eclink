@@ -991,7 +991,12 @@ impl AgentAdapter for ClaudeAdapter {
                 .with_hint("Edit the profile and enter its API key before activating it.")
         })?;
 
-        let base_url = crate::profiles::normalize_base_url(&profile.base_url);
+        let base_url = crate::profiles::resolve_anthropic_base_base_url(&profile.base_url)
+            .map(|resolved| resolved.trim_end_matches('/').to_string())
+            .map_err(|err| {
+                BridgeError::validation(format!("This profile's base URL is not valid: {err}"))
+                    .with_hint("Edit the profile and correct the base URL.")
+            })?;
         let wire_model = profile.wire_model().to_string();
 
         let reason = crate::adapters::MutationReason::ActivateProfile {
@@ -1770,6 +1775,131 @@ mod tests {
   "hasCompletedOnboarding": true
 }
 "#;
+
+    #[test]
+    fn activating_a_v1_base_url_does_not_make_claude_code_request_v1_v1() {
+        // The real reported failure, 2026-10-20. A ModelVIP profile saved as
+        // `https://modelrouter.id/v1` passed in the Playground (which builds the
+        // full `/v1/messages` URL itself) but failed in real Claude Code, which
+        // appends `/v1/messages` to ANTHROPIC_BASE_URL. The provider answered
+        // `404 Invalid URL (POST /v1/v1/messages)` and Claude Code blamed the
+        // model.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+
+        let adapter = ClaudeAdapter::new(backups);
+        let mut profile = profile_for_claude();
+        profile.base_url = "https://modelrouter.id/v1".into();
+        // A colon inside the model ID is part of the provider's name for it and
+        // must reach Claude Code untouched.
+        profile.model = "deepseek-v4.1-flash:mr".into();
+
+        adapter
+            .apply_profile(&profile, &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        let written = doc.env_get(BASE_URL_VAR).expect("base URL written");
+        assert_eq!(
+            written, "https://modelrouter.id",
+            "Claude Code appends /v1/messages, so a /v1 base double-counts the version"
+        );
+        // What Claude Code will actually request, spelled out.
+        assert_eq!(
+            format!("{written}/v1/messages"),
+            "https://modelrouter.id/v1/messages"
+        );
+
+        // The model ID, including the colon and provider suffix, survives exactly.
+        assert_eq!(
+            doc.get_str(MODEL_SETTINGS_KEY),
+            Some("deepseek-v4.1-flash:mr"),
+            "a custom model ID must not be rewritten"
+        );
+    }
+
+    #[test]
+    fn activating_a_base_url_without_a_version_is_unchanged() {
+        // The documented shape must keep working: a bare host is what Claude Code
+        // expects, so nothing is stripped.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+
+        let adapter = ClaudeAdapter::new(backups);
+        let mut profile = profile_for_claude();
+        profile.base_url = "https://modelrouter.id".into();
+        adapter
+            .apply_profile(&profile, &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(doc.env_get(BASE_URL_VAR), Some("https://modelrouter.id"));
+    }
+
+    #[test]
+    fn activating_keeps_a_custom_tenant_prefix_in_the_base_url() {
+        // Only the version segment is dropped; a tenant path is where the user's
+        // requests must go.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+
+        let adapter = ClaudeAdapter::new(backups);
+        let mut profile = profile_for_claude();
+        profile.base_url = "https://gw.example.com/api/anthropic/v1".into();
+        adapter
+            .apply_profile(&profile, &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            doc.env_get(BASE_URL_VAR),
+            Some("https://gw.example.com/api/anthropic")
+        );
+    }
+
+    #[test]
+    fn activating_never_writes_a_session_model_variable() {
+        // ANTHROPIC_MODEL outranks the settings file and repins the model on every
+        // launch, whatever the user later picks with /model. Only the `model` key
+        // is written.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+
+        let adapter = ClaudeAdapter::new(backups);
+        adapter
+            .apply_profile(&profile_for_claude(), &options(Some("sk-test")))
+            .expect("apply must succeed");
+
+        let doc = ClaudeJson::parse(&std::fs::read_to_string(&settings).unwrap()).unwrap();
+        assert_eq!(
+            doc.env_get(MODEL_VAR),
+            None,
+            "ANTHROPIC_MODEL must not be written"
+        );
+        assert_eq!(
+            doc.env_get(DEFAULT_MODEL_VAR),
+            None,
+            "ANTHROPIC_DEFAULT_MODEL must not be written"
+        );
+    }
+
+    #[test]
+    fn activating_with_an_invalid_base_url_changes_nothing() {
+        // The base URL is now resolved before the file is touched, so a broken
+        // URL must fail loudly and leave the user's settings intact.
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let (_scratch, backups, settings) = scratch();
+        let before = r#"{ "env": { "MY_FLAG": "1" }, "theme": "dark" }"#;
+        std::fs::write(&settings, before).unwrap();
+
+        let adapter = ClaudeAdapter::new(backups);
+        let mut profile = profile_for_claude();
+        profile.base_url = "not a url".into();
+        assert!(adapter
+            .apply_profile(&profile, &options(Some("sk-test")))
+            .is_err());
+        assert_eq!(std::fs::read_to_string(&settings).unwrap(), before);
+    }
 
     #[test]
     fn activating_a_profile_selects_its_model_for_new_sessions() {

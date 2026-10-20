@@ -68,13 +68,13 @@ jobs:
       # Only this job needs to write, and only to create the release.
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           ref: ${{ needs.preflight.outputs.tag }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: "24"
           cache: npm
 
       - uses: dtolnay/rust-toolchain@stable
@@ -108,11 +108,15 @@ jobs:
             exit 1
           }
 
+      - name: Build the helper
+        # Before the tests, because `cargo test --workspace` compiles the eclink
+        # crate, whose build script rejects the declared bundle resource
+        # `../target/release/eclink-helper.exe` when it is absent. The tests also
+        # execute this binary.
+        run: cargo build --release -p eclink-helper
+
       - name: Full test suite
         run: cargo test --workspace
-
-      - name: Build the helper
-        run: cargo build --release -p eclink-helper
 
       - name: Build the signed installer
         env:

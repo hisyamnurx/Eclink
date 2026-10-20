@@ -10,6 +10,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A profile whose base URL ends in `/v1` now works in real Claude Code, not
+  just in the Playground.** Claude Code appends `/v1/messages` to
+  `ANTHROPIC_BASE_URL`, so writing a base URL that already ended in `/v1` made
+  it request `/v1/v1/messages`. The provider answered
+  `404 Invalid URL (POST /v1/v1/messages)`, and Claude Code reported that as
+  "There's an issue with the selected model (…)", which points at the model ID
+  instead of the URL. Activation now removes only a trailing version segment
+  before writing the variable, and keeps a custom tenant path such as
+  `/api/anthropic`. A base URL that is not a URL is rejected before the settings
+  file is touched.
+- **A custom model ID containing `:` (for example `deepseek-v4.1-flash:mr`) is
+  preserved exactly.** It was never the cause of the failure above, and it is not
+  rewritten to suppress the "model isn't recognized" startup notice.
+
+### Changed
+
+- **CI and the release workflow** now check out text files with LF line endings
+  on Windows (`.gitattributes`), which is what made the "Format check" step fail
+  with every file reported unformatted; the Rust job builds the credential helper
+  before Clippy and the tests, because the Tauri build script refuses to compile
+  while the helper declared as a bundle resource is missing. Both workflows moved
+  to `actions/checkout@v5` and `actions/setup-node@v5` on Node 24, since the
+  runners now force Node 20 actions onto Node 24.
+
 ## [0.2.0] - 2026-10-20
 
 The rebranding release. **Eclyzer Bridge is now Eclink.** This release changes the

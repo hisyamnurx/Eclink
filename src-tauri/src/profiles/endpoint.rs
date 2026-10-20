@@ -227,6 +227,59 @@ pub fn resolve_endpoint(base_url: &str, protocol: ApiProtocol) -> Result<String,
     Ok(rebuilt.to_string())
 }
 
+/// The base URL Claude Code must be given in `ANTHROPIC_BASE_URL`.
+///
+/// **This is not the same value the Playground uses, and that difference is the
+/// whole reason a profile can pass in the Playground and fail in real Claude
+/// Code.**
+///
+/// * Eclink's tester builds the *complete* request URL itself
+///   ([`resolve_endpoint`]), so it needs the stored base including any `/v1`
+///   version segment and requests `<stored>/v1/messages`.
+/// * Claude Code instead treats `ANTHROPIC_BASE_URL` as a prefix and appends its
+///   own `/v1/messages`. Its own documented connectivity check is
+///   `POST "$ANTHROPIC_BASE_URL/v1/messages"`, and its compatibility guide states
+///   it "posts to `/v1/messages`". The documented example value is a bare host
+///   such as `https://llm-gateway.example.com`.
+///
+/// So a base URL stored for the OpenAI-compatible route — which conventionally
+/// ends in `/v1`, e.g. `https://modelrouter.id/v1` — must have that version
+/// segment removed before it is written, or Claude Code requests
+/// `/v1/v1/messages`. A real provider answers that with
+/// `404 {"error":{"message":"Invalid URL (POST /v1/v1/messages)"}}`, which Claude
+/// Code then reports as the misleading "There's an issue with the selected
+/// model".
+///
+/// Only a *trailing* version segment is removed. A custom tenant path such as
+/// `/api/anthropic` is kept, because it is part of where the user's requests must
+/// go. When the base is exactly a version segment (`https://h/v1`), dropping it
+/// would leave a bare origin, which still resolves correctly to `/v1/messages`.
+pub fn resolve_anthropic_base_base_url(base_url: &str) -> Result<String, ResolveError> {
+    let trimmed = base_url.trim();
+    let mut url = Url::parse(trimmed).map_err(|_| {
+        ResolveError::Invalid(format!(
+            "\"{trimmed}\" is not a valid URL, so no endpoint can be derived from it."
+        ))
+    })?;
+
+    // A query or fragment is not part of the API prefix Claude Code appends to.
+    url.set_query(None);
+    url.set_fragment(None);
+
+    let mut segments = path_segments(&url);
+    if segments.last().is_some_and(|last| is_version_segment(last)) {
+        segments.pop();
+    }
+
+    let path = if segments.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", segments.join("/"))
+    };
+    url.set_path(&path);
+    Ok(url.to_string())
+}
+
 /// The endpoint each agent would use for this provider, resolved in one pass.
 ///
 /// Returns `None` for an agent when the stored URL cannot be parsed, so the UI
@@ -595,6 +648,110 @@ mod tests {
             resolve_auxiliary_path("https://example.com/v1", "/health").unwrap(),
             "https://example.com/v1/health"
         );
+    }
+
+    #[test]
+    fn the_anthropic_base_url_never_leaves_a_trailing_version_for_claude_code() {
+        // Regression: Claude Code appends `/v1/messages` to ANTHROPIC_BASE_URL.
+        // Writing a stored base that already ends in `/v1` produced
+        // `/v1/v1/messages`, which a real provider answered with
+        // `404 Invalid URL (POST /v1/v1/messages)`. Claude Code then reported the
+        // misleading "There's an issue with the selected model", so a profile that
+        // worked in the Playground failed in a real session.
+        for (stored, expected) in [
+            ("https://modelrouter.id/v1", "https://modelrouter.id"),
+            ("https://modelrouter.id/v1/", "https://modelrouter.id"),
+            ("https://modelrouter.id", "https://modelrouter.id"),
+            ("https://modelrouter.id/", "https://modelrouter.id"),
+            ("https://h/v2", "https://h"),
+            ("https://h/v10", "https://h"),
+            ("http://127.0.0.1:20128/v1", "http://127.0.0.1:20128"),
+        ] {
+            let base = resolve_anthropic_base_base_url(stored).unwrap();
+            assert_eq!(base.trim_end_matches('/'), expected, "stored {stored}");
+            // The property that actually matters: what Claude Code will request.
+            let requested = format!("{}/v1/messages", base.trim_end_matches('/'));
+            assert_eq!(
+                requested.matches("/v1/").count(),
+                1,
+                "stored {stored} made Claude Code request {requested}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_anthropic_base_url_keeps_a_custom_tenant_prefix() {
+        // Dropping a tenant path would send the user's requests somewhere they did
+        // not choose, so only a trailing *version* segment is removed.
+        for (stored, expected) in [
+            (
+                "https://gw.example.com/api/anthropic",
+                "https://gw.example.com/api/anthropic",
+            ),
+            (
+                "https://gw.example.com/api/openai/v1",
+                "https://gw.example.com/api/openai",
+            ),
+            ("https://gw.example.com/myv1", "https://gw.example.com/myv1"),
+            (
+                "https://gw.example.com/v1beta",
+                "https://gw.example.com/v1beta",
+            ),
+        ] {
+            assert_eq!(
+                resolve_anthropic_base_base_url(stored).unwrap(),
+                expected,
+                "stored {stored}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_anthropic_base_url_of_a_bare_version_origin_is_still_usable() {
+        // `https://h/v1` has no tenant path; dropping the version leaves the
+        // origin, which Claude Code's own append turns back into `/v1/messages`.
+        let base = resolve_anthropic_base_base_url("https://h/v1").unwrap();
+        assert_eq!(base.trim_end_matches('/'), "https://h");
+        assert_eq!(
+            format!("{}/v1/messages", base.trim_end_matches('/')),
+            "https://h/v1/messages"
+        );
+    }
+
+    #[test]
+    fn the_anthropic_base_url_drops_a_query_and_fragment() {
+        // A query string on the base would otherwise end up before the route Claude
+        // Code appends.
+        let base = resolve_anthropic_base_base_url("https://h/v1?tenant=acme#x").unwrap();
+        assert!(!base.contains('?'), "{base}");
+        assert!(!base.contains('#'), "{base}");
+        assert_eq!(base, "https://h/");
+    }
+
+    #[test]
+    fn the_anthropic_base_url_rejects_an_unparsable_url() {
+        assert!(resolve_anthropic_base_base_url("not a url").is_err());
+        assert!(resolve_anthropic_base_base_url("").is_err());
+    }
+
+    #[test]
+    fn the_playground_and_claude_code_agree_on_where_the_request_lands() {
+        // The two code paths must describe the same request even though they build
+        // it differently: the tester resolves the full URL, Claude Code appends.
+        for stored in [
+            "https://modelrouter.id/v1",
+            "https://modelrouter.id",
+            "https://gw.example.com/api/anthropic",
+            "https://gw.example.com/api/anthropic/v1",
+        ] {
+            let playground = resolve_endpoint(stored, ApiProtocol::AnthropicMessages).unwrap();
+            let written = resolve_anthropic_base_base_url(stored).unwrap();
+            let claude_code = format!("{}/v1/messages", written.trim_end_matches('/'));
+            assert_eq!(
+                playground, claude_code,
+                "stored {stored}: the Playground tests {playground} but Claude Code requests {claude_code}"
+            );
+        }
     }
 
     #[test]

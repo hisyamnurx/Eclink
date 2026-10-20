@@ -1,0 +1,25 @@
+# Normalise every text file to LF in the working tree, on every platform.
+#
+# This is a correctness requirement, not a style preference. GitHub's Windows
+# runners enable `core.autocrlf=true` system-wide, so without this file
+# `actions/checkout` writes CRLF into the working tree while the committed blobs
+# are LF. Prettier's default `endOfLine` is `"lf"`, so every checked-in file then
+# fails `prettier --check` — which is exactly how the CI "Format check" step
+# failed on 2026-10-20 with all 35 files reported unformatted at once.
+#
+# Pinning `eol=lf` here makes the working tree identical to the committed bytes
+# regardless of the local `core.autocrlf` setting, so the same command gives the
+# same result on Windows, macOS, and Linux.
+* text=auto eol=lf
+
+# Binary assets must never be line-ending converted or diffed as text.
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.gif binary
+*.icns binary
+*.exe binary
+*.dll binary
+*.sig binary
