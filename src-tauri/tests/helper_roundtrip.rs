@@ -16,7 +16,7 @@ fn helper_resolves_a_secret_written_by_the_app() {
         .put("profile-abc", "sk-roundtrip-secret-0123456789")
         .expect("DPAPI seal must succeed for the current user");
 
-    // Locate the helper built by `cargo build --release -p eclyzer-bridge-helper`.
+    // Locate the helper built by `cargo build --release -p eclink-helper`.
     let helper = helper_path().expect("helper binary must exist; build it first");
     let output = Command::new(&helper)
         .args(["secret", "resolve", "profile-abc"])
@@ -72,13 +72,16 @@ fn helper_path() -> Option<std::path::PathBuf> {
     // level up.
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let root = manifest.parent()?;
+    // `eclink-helper` is the current crate name. `eclyzer-bridge-helper` is the
+    // pre-rebrand name, and the application still accepts it as a fallback, so an
+    // older build in the same target directory must not make these tests pass
+    // against the wrong binary — but it is a better answer than "not found".
     for profile in ["release", "debug"] {
-        let candidate = root
-            .join("target")
-            .join(profile)
-            .join("eclyzer-bridge-helper.exe");
-        if candidate.is_file() {
-            return Some(candidate);
+        for name in ["eclink-helper.exe", "eclyzer-bridge-helper.exe"] {
+            let candidate = root.join("target").join(profile).join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
         }
     }
     None
