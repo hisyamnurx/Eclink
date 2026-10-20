@@ -79,7 +79,7 @@ pub fn builder() -> BridgeResult<tauri::Builder<tauri::Wry>> {
 
 /// Log a startup failure and return a short, actionable message.
 pub fn bootstrap_error_message(err: &BridgeError) -> String {
-    let mut message = format!("Eclyzer Bridge could not start.\n\n{}\n", err.message);
+    let mut message = format!("Eclink could not start.\n\n{}\n", err.message);
     if let Some(hint) = &err.hint {
         message.push_str(&format!("\n{hint}\n"));
     }

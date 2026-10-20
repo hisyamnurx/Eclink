@@ -30,7 +30,7 @@ impl DiagnosticsReport {
     /// Render as pasteable text.
     pub fn to_text(&self) -> String {
         let mut out = String::new();
-        out.push_str("Eclyzer Bridge Diagnostics\n");
+        out.push_str("Eclink Diagnostics\n");
         out.push_str("==========================\n\n");
         out.push_str(&format!("App version: {}\n", self.app_version));
         out.push_str(&format!("Platform: {}\n", self.platform));
@@ -95,7 +95,7 @@ fn config_state_label(state: crate::adapters::ConfigParseState) -> &'static str 
     match state {
         crate::adapters::ConfigParseState::Missing => "not created yet",
         crate::adapters::ConfigParseState::Valid => "valid",
-        crate::adapters::ConfigParseState::Invalid => "INVALID (Eclyzer Bridge will not modify it)",
+        crate::adapters::ConfigParseState::Invalid => "INVALID (Eclink will not modify it)",
     }
 }
 
@@ -125,7 +125,7 @@ pub fn build_report(state: &crate::app::AppState) -> crate::error::BridgeResult<
     for agent in &agents {
         if agent.config_state == crate::adapters::ConfigParseState::Invalid {
             warnings.push(format!(
-                "{} has a configuration file Eclyzer Bridge cannot parse, so it will not be modified.",
+                "{} has a configuration file Eclink cannot parse, so it will not be modified.",
                 agent.display_name
             ));
         }

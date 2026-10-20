@@ -608,7 +608,7 @@ async fn protocol_mismatch_note(
         // saying so would wrongly imply the provider can only be one thing.
         note.push_str(&format!(
             " It does answer {}, so the endpoint is reachable and the credential was \
-             accepted; only the {} route is missing. Eclyzer Bridge does not translate \
+             accepted; only the {} route is missing. Eclink does not translate \
              between APIs, so {} cannot be used with it unless the provider or a \
              gateway in front of it exposes that route.",
             available.join(" and "),

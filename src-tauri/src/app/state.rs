@@ -76,8 +76,15 @@ fn default_true() -> bool {
 ///
 /// The installer places it beside the application executable; the debug and
 /// release target directories cover a development build.
+///
+/// Both the Eclink name and the pre-rename `eclyzer-bridge-helper.exe` name are
+/// probed. An existing installation may still have the old binary on disk, and
+/// a Codex `config.toml` written by the old app contains an absolute path to it.
+/// Accepting both names means such a configuration keeps resolving credentials
+/// after the upgrade instead of silently falling back to an environment key.
 fn helper_candidates() -> Vec<std::path::PathBuf> {
-    const FILE_NAME: &str = "eclyzer-bridge-helper.exe";
+    const FILE_NAME: &str = "eclink-helper.exe";
+    const LEGACY_FILE_NAME: &str = "eclyzer-bridge-helper.exe";
     let mut candidates = Vec::new();
 
     if let Ok(exe) = std::env::current_exe() {
@@ -86,6 +93,10 @@ fn helper_candidates() -> Vec<std::path::PathBuf> {
             // Tauri places bundled resources in a `resources` subdirectory
             // beside the executable on some layouts.
             candidates.push(dir.join("resources").join(FILE_NAME));
+            // Legacy name, same two layouts, so an install that still carries
+            // the old helper is found rather than treated as missing.
+            candidates.push(dir.join(LEGACY_FILE_NAME));
+            candidates.push(dir.join("resources").join(LEGACY_FILE_NAME));
         }
     }
     candidates.push(std::path::PathBuf::from(FILE_NAME));
@@ -126,10 +137,10 @@ impl AppState {
         let log_guard = crate::diagnostics::init_logging(&paths.logs_dir(), level).ok();
 
         tracing::info!(
-            target: "eclyzer_bridge",
+            target: "eclink",
             version = crate::APP_VERSION,
             data_dir = %paths.root().display(),
-            "Eclyzer Bridge starting"
+            "Eclink starting"
         );
 
         // Both adapters share one backup manager, so the Original/Snapshot/

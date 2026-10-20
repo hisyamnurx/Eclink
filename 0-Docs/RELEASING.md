@@ -1,4 +1,4 @@
-# Releasing Eclyzer Bridge
+# Releasing Eclink
 
 Maintainer-facing notes for cutting a release. Read the whole document before
 starting: the signing steps are easy to get wrong and the failure mode is an
@@ -22,7 +22,7 @@ Two places reference where clients look for updates, and they must agree:
       "dialog": false,
       "pubkey": "<committed minisign public key>",
       "endpoints": [
-        "https://github.com/hisyamnurx/Eclyzer-Bridge/releases/latest/download/latest.json"
+        "https://github.com/hisyamnurx/Eclink/releases/latest/download/latest.json"
       ],
       "windows": {
         "installMode": "passive"
@@ -174,7 +174,7 @@ npm run tauri:build
 ```
 
 The installer lands in `target/release/bundle/nsis/`, as
-`Eclyzer-Bridge_X.Y.Z_x64-setup.exe`.
+`Eclink_X.Y.Z_x64-setup.exe`.
 
 ### 5. Verify the signature file exists
 
@@ -206,7 +206,7 @@ Create a release for the tag, mark it as the latest release, and attach:
 
 Paste the changelog section into the release notes. Then configure the update
 endpoint's source: `latest.json` must be reachable at
-`https://github.com/hisyamnurx/Eclyzer-Bridge/releases/latest/download/latest.json`,
+`https://github.com/hisyamnurx/Eclink/releases/latest/download/latest.json`,
 which means it has to be a release asset, not a file committed to the repository.
 
 ---
@@ -224,7 +224,7 @@ version is and where to get it.
   "platforms": {
     "windows-x86_64": {
       "signature": "<contents of the .sig file>",
-      "url": "https://github.com/hisyamnurx/Eclyzer-Bridge/releases/download/vX.Y.Z/Eclyzer-Bridge_X.Y.Z_x64-setup.exe"
+      "url": "https://github.com/hisyamnurx/Eclink/releases/download/vX.Y.Z/Eclink_X.Y.Z_x64-setup.exe"
     }
   }
 }
@@ -261,7 +261,7 @@ published.
    not marked latest, or `latest.json` was not attached as an asset.
 
    ```powershell
-   Invoke-RestMethod "https://github.com/hisyamnurx/Eclyzer-Bridge/releases/latest/download/latest.json"
+   Invoke-RestMethod "https://github.com/hisyamnurx/Eclink/releases/latest/download/latest.json"
    ```
 
 2. **Check `version` against the installer.** The manifest version, the

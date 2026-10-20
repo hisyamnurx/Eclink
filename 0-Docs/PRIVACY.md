@@ -1,15 +1,15 @@
 # Privacy
 
-Eclyzer Bridge is a local desktop application. It has no backend, no account
+Eclink is a local desktop application. It has no backend, no account
 system, and no way to report anything about you to its authors.
 
-**Eclyzer Bridge collects nothing.** Specifically, it has no telemetry, no
+**Eclink collects nothing.** Specifically, it has no telemetry, no
 analytics, no crash reporting, no usage statistics, no install identifier, no
 device fingerprint, and no server operated by this project. Nothing about you,
 your machine, your providers, your API keys, or your prompts is sent to the
 people who make this app — because there is nowhere for it to be sent.
 
-> **Eclyzer Bridge is an independent open-source project and is not affiliated
+> **Eclink is an independent open-source project and is not affiliated
 > with, endorsed by, or sponsored by OpenAI or Anthropic.**
 
 ---
@@ -40,7 +40,7 @@ At most **once every 24 hours**, on startup, the app makes an ordinary HTTPS
 request for this project's public release manifest:
 
 ```
-https://github.com/hisyamnurx/Eclyzer-Bridge/releases/latest/download/latest.json
+https://github.com/hisyamnurx/Eclink/releases/latest/download/latest.json
 ```
 
 That request contains **nothing about you**: no identifier, no version report
@@ -109,7 +109,7 @@ glance whether your keys are actually encrypted.
   can prevent that, and this project will not pretend otherwise.
 
 Where the agent allows it, the key does not even enter the agent's configuration
-file: **Codex** is pointed at a bundled `eclyzer-bridge-helper.exe` that fetches
+file: **Codex** is pointed at a bundled `eclink-helper.exe` that fetches
 the key from encrypted storage on demand, so `config.toml` contains only the
 helper's path. **Claude Code** has no declarative equivalent that does not
 embed a command string, so the key is written into Claude Code's user settings
@@ -208,7 +208,7 @@ into a public issue.
 ## How to verify this yourself
 
 You do not have to take any of this on trust. The app is MIT-licensed and the
-complete source is at <https://github.com/hisyamnurx/Eclyzer-Bridge>. The files
+complete source is at <https://github.com/hisyamnurx/Eclink>. The files
 that make these claims true are:
 
 | Claim                                                                   | File to read                                                   |
@@ -243,6 +243,6 @@ SDK, no analytics SDK, and no crash-reporting SDK.
 
 ## Changes to this document
 
-This document describes version 0.1.0 of Eclyzer Bridge. If a future version
+This document describes version 0.2.0 of Eclink. If a future version
 changes what the app sends or stores, this file will be updated in the same
 change, because a privacy document that lags the code is worse than none.

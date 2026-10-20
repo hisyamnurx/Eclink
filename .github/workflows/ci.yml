@@ -78,7 +78,7 @@ jobs:
       - name: Build the helper
         # The helper is a build artefact the integration tests depend on, and it
         # is also a declared Tauri resource.
-        run: cargo build --release -p eclyzer-bridge-helper
+        run: cargo build --release -p eclink-helper
 
       - name: Test
         run: cargo test --workspace
@@ -105,7 +105,7 @@ jobs:
         run: npm ci
 
       - name: Build the helper
-        run: cargo build --release -p eclyzer-bridge-helper
+        run: cargo build --release -p eclink-helper
 
       - name: Build the application
         # A pull request verifies that the app compiles and bundles, but it does
@@ -116,8 +116,8 @@ jobs:
       - name: Verify the app binary exists
         shell: pwsh
         run: |
-          $app = "target/release/eclyzer-bridge.exe"
-          $helper = "target/release/eclyzer-bridge-helper.exe"
+          $app = "target/release/eclink.exe"
+          $helper = "target/release/eclink-helper.exe"
           foreach ($path in @($app, $helper)) {
             if (-not (Test-Path $path)) {
               Write-Error "Expected build output is missing: $path"

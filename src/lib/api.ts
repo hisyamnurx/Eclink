@@ -415,7 +415,7 @@ export interface Commands {
   /**
    * Remove every provider and model override, including ones the user created.
    *
-   * Stronger than `restore_default`, which only removes what Eclyzer Bridge can
+   * Stronger than `restore_default`, which only removes what Eclink can
    * prove it owns. Callers must confirm first.
    */
   reset_to_stock_defaults: { args: { agent: AgentId }; result: ApplyOutcome };
@@ -513,7 +513,7 @@ export function toApiError(raw: unknown): ApiError {
     }
     return new ApiError({
       kind: "internal",
-      message: "Something went wrong in Eclyzer Bridge.",
+      message: "Something went wrong in Eclink.",
     });
   }
 
@@ -536,7 +536,7 @@ export function toApiError(raw: unknown): ApiError {
 
   return new ApiError({
     kind: "internal",
-    message: "Something went wrong in Eclyzer Bridge.",
+    message: "Something went wrong in Eclink.",
   });
 }
 
@@ -551,7 +551,7 @@ export async function call<K extends CommandName>(
     throw new ApiError({
       kind: "internal",
       message:
-        "Eclyzer Bridge is not connected to its backend. Open the desktop app instead of a browser tab.",
+        "Eclink is not connected to its backend. Open the desktop app instead of a browser tab.",
     });
   }
 

@@ -82,7 +82,7 @@ pub async fn list_agents(state: tauri::State<'_, AppState>) -> CommandResult<Vec
                 Err(err) => {
                     // A detection failure for one agent must not blank the other.
                     tracing::warn!(
-                        target: "eclyzer_bridge",
+                        target: "eclink",
                         agent = adapter.id().as_str(),
                         error = %err,
                         "agent detection failed"
@@ -166,7 +166,7 @@ pub async fn get_diagnostics(
                 Ok(diagnostics) => out.push(diagnostics),
                 Err(err) => {
                     tracing::warn!(
-                        target: "eclyzer_bridge",
+                        target: "eclink",
                         agent = adapter.id().as_str(),
                         error = %err,
                         "diagnostics failed"

@@ -112,7 +112,7 @@ jobs:
         run: cargo test --workspace
 
       - name: Build the helper
-        run: cargo build --release -p eclyzer-bridge-helper
+        run: cargo build --release -p eclink-helper
 
       - name: Build the signed installer
         env:
@@ -181,7 +181,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
-          name: Eclyzer Bridge ${{ needs.preflight.outputs.tag }}
+          name: Eclink ${{ needs.preflight.outputs.tag }}
           draft: true
           generate_release_notes: true
           files: |

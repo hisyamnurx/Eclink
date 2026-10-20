@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Minimum permissions for the Eclyzer Bridge main window. Only the APIs the UI actually calls are granted; there is no generic filesystem or shell permission.",
+  "description": "Minimum permissions for the Eclink main window. Only the APIs the UI actually calls are granted; there is no generic filesystem or shell permission.",
   "windows": ["main"],
   "permissions": [
     "core:default",

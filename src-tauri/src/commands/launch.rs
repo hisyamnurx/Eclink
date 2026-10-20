@@ -209,7 +209,7 @@ pub async fn launch_agent(
         let env = adapter.launch_env(secret.as_ref().map(|value| value.expose()))?;
         let pid = crate::process::spawn_launch(&plan, &env)?;
         tracing::info!(
-            target: "eclyzer_bridge",
+            target: "eclink",
             agent = agent.as_str(),
             pid,
             "launched agent"

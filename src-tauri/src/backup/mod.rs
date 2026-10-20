@@ -155,7 +155,7 @@ impl BackupManager {
         })?;
         write_atomic(&dir.join("meta.json"), meta_json.as_bytes())?;
 
-        tracing::info!(target: "eclyzer_bridge", agent, "original backup created");
+        tracing::info!(target: "eclink", agent, "original backup created");
         Ok(true)
     }
 
@@ -203,7 +203,7 @@ impl BackupManager {
             return Err(BridgeError::internal(
                 "There is no original backup to restore for this agent.",
             )
-            .with_hint("Eclyzer Bridge has not modified this agent yet."));
+            .with_hint("Eclink has not modified this agent yet."));
         };
 
         if meta.existed {
@@ -212,7 +212,7 @@ impl BackupManager {
             // Bridge created this file; restoring the original state means
             // removing it.
             std::fs::remove_file(config_path).map_err(|err| {
-                BridgeError::io("Could not remove the configuration file Eclyzer Bridge created.")
+                BridgeError::io("Could not remove the configuration file Eclink created.")
                     .with_details(err.to_string())
             })?;
         }

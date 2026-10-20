@@ -1,7 +1,7 @@
 /**
  * Home: what each agent is currently pointed at, and the primary actions.
  *
- * "Active:" only names a profile when Eclyzer Bridge recognizes its own managed
+ * "Active:" only names a profile when Eclink recognizes its own managed
  * configuration. When the user has a custom configuration Bridge did not write,
  * this says "External configuration" and never "Default" - claiming otherwise
  * would be a lie about the user's own file (PRD §20.2).

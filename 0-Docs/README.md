@@ -1,15 +1,15 @@
-<img src="../public/logo-mark.png" alt="Eclyzer Bridge" width="120" align="right" />
+<img src="../public/logo-mark.png" alt="Eclink" width="120" align="right" />
 
-# Eclyzer Bridge
+# Eclink
 
 A lightweight provider and profile manager for AI coding agents on Windows.
 
-Eclyzer Bridge points **OpenAI Codex** and **Claude Code** at an
+Eclink points **OpenAI Codex** and **Claude Code** at an
 OpenAI-compatible or Anthropic-compatible provider you choose — without you
 hand-editing `config.toml` or `settings.json`, and without pasting an API key
 into a file you might commit by accident.
 
-> **Eclyzer Bridge is an independent open-source project and is not affiliated
+> **Eclink is an independent open-source project and is not affiliated
 > with, endorsed by, or sponsored by OpenAI or Anthropic.**
 
 ---
@@ -21,7 +21,7 @@ file and editing it by hand. That file often already contains settings you care
 about: MCP servers, sandbox rules, other providers, comments explaining why
 something is the way it is. A careless edit loses them.
 
-Eclyzer Bridge does that edit for you, carefully:
+Eclink does that edit for you, carefully:
 
 - It reads and parses your existing configuration first, and **refuses to touch
   a file it cannot parse.** It never auto-repairs, because "repairing" a file it
@@ -49,8 +49,8 @@ Non-Windows platforms are not supported and are not tested.
 
 ## Install
 
-Download the latest `Eclyzer-Bridge_x.y.z_x64-setup.exe` from
-[Releases](https://github.com/hisyamnurx/Eclyzer-Bridge/releases) and run it.
+Download the latest `Eclink_x.y.z_x64-setup.exe` from
+[Releases](https://github.com/hisyamnurx/Eclink/releases) and run it.
 
 The installer is per-user: it does not need administrator rights and does not
 modify anything outside your own Windows account.
@@ -59,7 +59,7 @@ modify anything outside your own Windows account.
 
 ## How to use it
 
-1. **Open Eclyzer Bridge.** The Overview screen detects Codex and Claude Code and
+1. **Open Eclink.** The Overview screen detects Codex and Claude Code and
    shows what each one is currently pointed at.
 2. **Add a provider.** Choose a preset or enter a base URL and model ID, then
    paste your API key.
@@ -68,9 +68,9 @@ modify anything outside your own Windows account.
    model exists, whether streaming and tool calling work. You see exactly which
    step failed and why.
 4. **Activate it.** Once a test passes, activate the provider for that agent.
-   Eclyzer Bridge snapshots your configuration, applies the change, and re-reads
+   Eclink snapshots your configuration, applies the change, and re-reads
    the file to verify what it wrote.
-5. **Open your agent.** Eclyzer Bridge opens it in a new terminal window in the
+5. **Open your agent.** Eclink opens it in a new terminal window in the
    folder you choose.
 
 ### Getting back to where you were
@@ -81,8 +81,8 @@ The History screen offers four ways back, all reversible:
 | -------------------- | ----------------------------------------------------------------------------------- |
 | **Undo last change** | Returns the agent to the state just before its most recent change.                  |
 | **Snapshots**        | The 20 most recent states, one taken before every change.                           |
-| **Restore default**  | Removes the provider Eclyzer Bridge added. Nothing else changes.                    |
-| **Restore original** | Puts back the exact file that existed before Eclyzer Bridge ever touched the agent. |
+| **Restore default**  | Removes the provider Eclink added. Nothing else changes.                    |
+| **Restore original** | Puts back the exact file that existed before Eclink ever touched the agent. |
 
 The original backup is taken once, is never overwritten, and is never deleted
 automatically.
@@ -99,11 +99,12 @@ to this repository.
 
 Where the agent supports it, the key never enters your configuration file at all:
 
-- **Codex** is configured to run a small bundled helper
-  (`eclyzer-bridge-helper.exe`) that fetches the key from encrypted storage on
-  demand. Your `config.toml` contains only the helper's path.
+- **Codex** is configured to run a small bundled helper (`eclink-helper.exe`)
+  that fetches the key from encrypted storage on demand. Your `config.toml`
+  contains only the helper's path. A configuration written by the previous
+  release, which names `eclyzer-bridge-helper.exe`, keeps working.
 - **Claude Code** has no equivalent mechanism that does not embed a command
-  string, so the key is written to the user settings file, which Eclyzer Bridge
+  string, so the key is written to the user settings file, which Eclink
   then restricts to your Windows account. This is a deliberate trade-off
   documented in the code.
 
@@ -115,7 +116,7 @@ protect your key from malware already running as you. No local secret store can.
 
 ## Privacy
 
-**Eclyzer Bridge collects nothing.** There is no account, no telemetry, no
+**Eclink collects nothing.** There is no account, no telemetry, no
 analytics, no crash reporting, no install identifier, and no server operated by
 this project. Nothing about you or your machine is ever sent anywhere except as
 described below.
@@ -141,8 +142,8 @@ Prerequisites: [Node.js](https://nodejs.org/) 20+, [Rust](https://rustup.rs/)
 stable (MSVC toolchain), and the Visual Studio Build Tools with the Windows SDK.
 
 ```powershell
-git clone https://github.com/hisyamnurx/Eclyzer-Bridge.git
-cd Eclyzer-Bridge
+git clone https://github.com/hisyamnurx/Eclink.git
+cd Eclink
 npm install
 npm run tauri:dev      # development
 npm run tauri:build    # produces the installer
@@ -180,7 +181,7 @@ public key — or generate one with `npm run tauri signer generate`.
 
 ---
 
-## What Eclyzer Bridge is not
+## What Eclink is not
 
 Worth stating plainly, because the boundaries are deliberate:
 

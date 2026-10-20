@@ -3,7 +3,7 @@
 ## Our pledge
 
 We as members, contributors, and maintainers pledge to make participation in the
-Eclyzer Bridge community a harassment-free experience for everyone, regardless of
+Eclink community a harassment-free experience for everyone, regardless of
 age, body size, visible or invisible disability, ethnicity, sex characteristics,
 gender identity and expression, level of experience, education, socio-economic
 status, nationality, personal appearance, race, religion, or sexual identity and
@@ -37,7 +37,7 @@ Examples of unacceptable behaviour:
 
 ## A note specific to this project
 
-Eclyzer Bridge handles API keys and edits configuration files that people depend
+Eclink handles API keys and edits configuration files that people depend
 on. Two things follow from that, and they are part of the standards above:
 
 - **Never post a real API key.** Not in an issue, a pull request, a log excerpt,

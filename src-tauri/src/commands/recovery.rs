@@ -225,7 +225,7 @@ pub async fn undo_last_change(
             .latest_successful(agent.as_str())?
             .ok_or_else(|| {
                 BridgeError::validation("There is nothing to undo for this agent.")
-                    .with_hint("Eclyzer Bridge has not changed this agent's configuration yet.")
+                    .with_hint("Eclink has not changed this agent's configuration yet.")
             })?;
 
         let snapshot_id = entry.snapshot_id.ok_or_else(|| {

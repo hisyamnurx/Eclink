@@ -251,9 +251,7 @@ fn a_stock_reset_removes_every_environment_variable_it_manages() {
     // The managed variable list is the contract for what activation may write into
     // an agent's `env` block, and therefore what a reset must remove. If they ever
     // drift apart, a reset would leave a stale override behind.
-    use eclyzer_bridge_lib::adapters::claude::{
-        MANAGED_ENV_VARS, OWNED_ENV_VARS, STOCK_RESET_ENV_KEYS,
-    };
+    use eclink_lib::adapters::claude::{MANAGED_ENV_VARS, OWNED_ENV_VARS, STOCK_RESET_ENV_KEYS};
 
     for managed in MANAGED_ENV_VARS {
         assert!(
@@ -280,7 +278,7 @@ fn a_stock_reset_removes_the_model_alias_variables_too() {
     // groups, so the two categories have to stay distinguishable. The invariant is
     // therefore not that they share one array, but that the reset function consults
     // both. That is a property of the code, so it is asserted against the code.
-    use eclyzer_bridge_lib::adapters::claude::{FAMILY_ALIAS_VARS, STOCK_RESET_ENV_KEYS};
+    use eclink_lib::adapters::claude::{FAMILY_ALIAS_VARS, STOCK_RESET_ENV_KEYS};
 
     assert_eq!(
         FAMILY_ALIAS_VARS.len(),

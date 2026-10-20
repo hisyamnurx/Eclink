@@ -23,9 +23,9 @@
 
 use std::path::PathBuf;
 
-use eclyzer_bridge_lib::adapters::claude::{stock_reset_preview, ClaudeAdapter};
-use eclyzer_bridge_lib::adapters::{AgentAdapter, ApplyOptions};
-use eclyzer_bridge_lib::backup::BackupManager;
+use eclink_lib::adapters::claude::{stock_reset_preview, ClaudeAdapter};
+use eclink_lib::adapters::{AgentAdapter, ApplyOptions};
+use eclink_lib::backup::BackupManager;
 
 fn main() {
     let mut args = std::env::args().skip(1);

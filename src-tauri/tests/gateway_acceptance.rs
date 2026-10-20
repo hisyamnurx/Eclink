@@ -19,11 +19,9 @@
 //! the verdict, the step list, and the resolved endpoint - the things needed to
 //! compare Bridge's behaviour against a manual `curl`.
 
-use eclyzer_bridge_lib::profiles::{
-    AdvancedOptions, AgentId, AuthMode, CompatibilityStatus, Profile,
-};
-use eclyzer_bridge_lib::testing::Secret;
-use eclyzer_bridge_lib::testing::{test_profile, TestStepState};
+use eclink_lib::profiles::{AdvancedOptions, AgentId, AuthMode, CompatibilityStatus, Profile};
+use eclink_lib::testing::Secret;
+use eclink_lib::testing::{test_profile, TestStepState};
 
 fn env_or_skip(name: &str) -> Option<String> {
     match std::env::var(name) {
@@ -48,10 +46,10 @@ async fn a_translating_gateway_is_recognised_as_claude_compatible() {
     // Print the endpoint that will be requested, so it can be compared against the
     // URL a manual request used. The key is deliberately absent from this output.
     for protocol in [
-        eclyzer_bridge_lib::profiles::ApiProtocol::AnthropicMessages,
-        eclyzer_bridge_lib::profiles::ApiProtocol::OpenAiResponses,
+        eclink_lib::profiles::ApiProtocol::AnthropicMessages,
+        eclink_lib::profiles::ApiProtocol::OpenAiResponses,
     ] {
-        match eclyzer_bridge_lib::profiles::resolve_endpoint(&base_url, protocol) {
+        match eclink_lib::profiles::resolve_endpoint(&base_url, protocol) {
             Ok(url) => println!("resolved {:?} -> {url}", protocol),
             Err(err) => println!("resolved {:?} -> ERROR {err}", protocol),
         }

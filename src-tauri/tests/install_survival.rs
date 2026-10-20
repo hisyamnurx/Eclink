@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eclyzer_bridge_lib::paths::AppPaths;
+use eclink_lib::paths::AppPaths;
 
 /// Every path this application is allowed to delete inside.
 ///
@@ -32,8 +32,11 @@ fn deletable_roots(paths: &AppPaths) -> Vec<PathBuf> {
 ///
 /// These are *not* derived from `AppPaths`, because the point of the test is
 /// that the two are different. They are written out as the installer creates
-/// them: `%LOCALAPPDATA%\Eclyzer Bridge` (with a space) plus the Start Menu
-/// folder.
+/// them: `%LOCALAPPDATA%\Eclink` plus the Start Menu folder.
+///
+/// The install directory is named after the product, so it changed with the
+/// rename. The *data* directory deliberately did not; that separation is what
+/// keeps a cleanup routine from reaching an installed binary.
 fn install_locations() -> Vec<PathBuf> {
     let local = std::env::var_os("LOCALAPPDATA")
         .map(PathBuf::from)
@@ -42,18 +45,16 @@ fn install_locations() -> Vec<PathBuf> {
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Users\example\AppData\Roaming"));
     vec![
-        local.join("Eclyzer Bridge"),
-        local.join("Eclyzer Bridge").join("eclyzer-bridge.exe"),
-        local
-            .join("Eclyzer Bridge")
-            .join("eclyzer-bridge-helper.exe"),
-        local.join("Eclyzer Bridge").join("uninstall.exe"),
+        local.join("Eclink"),
+        local.join("Eclink").join("eclink.exe"),
+        local.join("Eclink").join("eclink-helper.exe"),
+        local.join("Eclink").join("uninstall.exe"),
         appdata
             .join("Microsoft")
             .join("Windows")
             .join("Start Menu")
             .join("Programs")
-            .join("Eclyzer Bridge.lnk"),
+            .join("Eclink.lnk"),
     ]
 }
 
@@ -119,9 +120,10 @@ fn the_installation_directory_cannot_reach_any_cleanup_root() {
 
 #[test]
 fn the_data_directory_and_the_install_directory_have_different_names() {
-    // The two are confusingly similar on purpose-different spellings:
-    // `EclyzerBridge` for data, `Eclyzer Bridge` for the program. Pin the
-    // distinction, because collapsing them to one name would make the previous
+    // After the rename the two names differ for a reason worth pinning: the data
+    // directory keeps the pre-rename spelling `EclyzerBridge` so existing
+    // profiles and secrets stay put, while the install directory takes the new
+    // product name `Eclink`. Collapsing them to one name would make the previous
     // tests pass while the paths actually became the same directory.
     let paths = AppPaths::resolve().expect("a data directory must resolve");
     let data_name = paths
@@ -131,13 +133,17 @@ fn the_data_directory_and_the_install_directory_have_different_names() {
         .unwrap_or_default()
         .to_string();
 
-    assert_eq!(data_name, "EclyzerBridge");
+    assert_eq!(
+        data_name, "EclyzerBridge",
+        "the data directory must keep its pre-rename name, or an upgrade strands \
+         every existing profile and API key"
+    );
     let install_name = install_locations()[0]
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or_default()
         .to_string();
-    assert_eq!(install_name, "Eclyzer Bridge");
+    assert_eq!(install_name, "Eclink");
     assert_ne!(
         data_name, install_name,
         "the data and install directories must not share a name"
@@ -394,7 +400,7 @@ fn the_bundle_helper_is_built_in_release_before_the_bundle() {
          target/release. The script is: {helper}"
     );
     assert!(
-        helper.contains("eclyzer-bridge-helper"),
+        helper.contains("eclink-helper"),
         "the helper:build script does not name the helper crate: {helper}"
     );
 
@@ -409,7 +415,7 @@ fn the_bundle_helper_is_built_in_release_before_the_bundle() {
     assert!(
         resources
             .keys()
-            .any(|k| k.contains("eclyzer-bridge-helper.exe") && k.contains("release")),
+            .any(|k| k.contains("eclink-helper.exe") && k.contains("release")),
         "bundle.resources does not read the helper from a release path: {resources:?}"
     );
 }

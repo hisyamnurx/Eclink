@@ -113,7 +113,7 @@ pub async fn send(
         return Err(BridgeError::provider_error(
             "The provider reported an error for this request.",
         )
-        .with_hint("This came from the provider, not from Eclyzer Bridge.")
+        .with_hint("This came from the provider, not from Eclink.")
         .with_details(message));
     }
 

@@ -80,7 +80,7 @@ impl SnapshotStore {
         self.prune(agent)?;
 
         tracing::info!(
-            target: "eclyzer_bridge",
+            target: "eclink",
             agent,
             snapshot = %id,
             reason,
@@ -111,7 +111,7 @@ impl SnapshotStore {
                 Err(err) => {
                     // One unreadable snapshot must not hide the rest.
                     tracing::warn!(
-                        target: "eclyzer_bridge",
+                        target: "eclink",
                         path = %path.display(),
                         error = %err,
                         "skipping unreadable snapshot metadata"
@@ -163,7 +163,7 @@ impl SnapshotStore {
         }
 
         if removed > 0 {
-            tracing::info!(target: "eclyzer_bridge", agent, removed, "pruned old snapshots");
+            tracing::info!(target: "eclink", agent, removed, "pruned old snapshots");
         }
         Ok(removed)
     }

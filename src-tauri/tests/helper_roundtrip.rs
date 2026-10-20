@@ -3,7 +3,7 @@
 
 use std::process::Command;
 
-use eclyzer_bridge_lib::secrets::SecretStore;
+use eclink_lib::secrets::SecretStore;
 
 #[test]
 fn helper_resolves_a_secret_written_by_the_app() {

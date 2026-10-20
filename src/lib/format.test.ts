@@ -2,7 +2,7 @@
  * Tests for the display helpers.
  *
  * These are the functions that decide whether the UI tells the truth about what
- * Eclyzer Bridge knows, so the interesting cases are the ones where a careless
+ * Eclink knows, so the interesting cases are the ones where a careless
  * implementation would overstate certainty.
  */
 

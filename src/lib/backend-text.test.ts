@@ -191,7 +191,7 @@ describe("app-owned error copy", () => {
   });
 
   it("translates every playground error the backend can raise", () => {
-    // Each of these is Eclyzer Bridge's own explanation of a technical condition, so
+    // Each of these is Eclink's own explanation of a technical condition, so
     // each must be readable in the chosen language.
     for (const code of KNOWN_ERROR_CODES) {
       const english = errorText(code, "fallback", "en");

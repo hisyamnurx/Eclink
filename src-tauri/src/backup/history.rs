@@ -84,7 +84,7 @@ impl HistoryStore {
             .or_else(|err| {
                 // History is diagnostic data: losing it must never block a restore.
                 tracing::warn!(
-                    target: "eclyzer_bridge",
+                    target: "eclink",
                     error = %err,
                     "history.json is unreadable; starting a fresh ledger"
                 );

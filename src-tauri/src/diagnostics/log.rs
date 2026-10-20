@@ -120,7 +120,7 @@ pub fn init_logging(dir: &Path, level: LogLevel) -> BridgeResult<LogGuard> {
 
     prune_logs(dir);
 
-    let file_appender = tracing_appender::rolling::daily(dir, "eclyzer-bridge.log");
+    let file_appender = tracing_appender::rolling::daily(dir, "eclink.log");
     let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
 
     let env_filter =
@@ -153,7 +153,7 @@ pub fn init_logging(dir: &Path, level: LogLevel) -> BridgeResult<LogGuard> {
         .try_init();
 
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let active = dir.join(format!("eclyzer-bridge.log.{today}"));
+    let active = dir.join(format!("eclink.log.{today}"));
 
     let _ = LOG_GUARD.set(dir.to_path_buf());
 
@@ -319,9 +319,9 @@ mod tests {
     #[test]
     fn prune_removes_old_files_and_keeps_recent() {
         let dir = tempfile::tempdir().unwrap();
-        let old = dir.path().join("eclyzer-bridge.log.2000-01-01");
+        let old = dir.path().join("eclink.log.2000-01-01");
         std::fs::write(&old, b"old").unwrap();
-        let recent = dir.path().join("eclyzer-bridge.log.recent");
+        let recent = dir.path().join("eclink.log.recent");
         std::fs::write(&recent, b"recent").unwrap();
 
         // Backdate the old file well past the retention window.
@@ -359,7 +359,7 @@ mod tests {
     fn read_recent_logs_returns_redacted_tail() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(
-            dir.path().join("eclyzer-bridge.log.2026-01-01"),
+            dir.path().join("eclink.log.2026-01-01"),
             b"info: start\nAuthorization: Bearer sk-abcdef0123456789abcdef\n",
         )
         .unwrap();

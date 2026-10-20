@@ -18,11 +18,11 @@
 //! in the crate's `bin` directory into the installer, and a maintenance tool must
 //! not ship to users.
 
-use eclyzer_bridge_lib::adapters::AgentId;
-use eclyzer_bridge_lib::commands::SUPPORTED_LANGUAGES;
-use eclyzer_bridge_lib::profiles::{AdvancedOptions, AuthMode, Profile};
-use eclyzer_bridge_lib::testing::pipeline::test_profile;
-use eclyzer_bridge_lib::testing::Secret;
+use eclink_lib::adapters::AgentId;
+use eclink_lib::commands::SUPPORTED_LANGUAGES;
+use eclink_lib::profiles::{AdvancedOptions, AuthMode, Profile};
+use eclink_lib::testing::pipeline::test_profile;
+use eclink_lib::testing::Secret;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -41,11 +41,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn language() -> Result<(), Box<dyn std::error::Error>> {
     let scratch = std::env::temp_dir().join("eclyzer-verify-language");
     let _ = std::fs::remove_dir_all(&scratch);
-    let paths = eclyzer_bridge_lib::paths::AppPaths::with_root(&scratch);
+    let paths = eclink_lib::paths::AppPaths::with_root(&scratch);
     paths.ensure_dirs()?;
     println!("scratch root             : {}", paths.root().display());
 
-    let before = eclyzer_bridge_lib::state::load_settings(&paths)?;
+    let before = eclink_lib::state::load_settings(&paths)?;
     println!("fresh install language   : {}", before.language);
     println!("supported languages      : {SUPPORTED_LANGUAGES:?}");
     assert_eq!(
@@ -55,12 +55,12 @@ fn language() -> Result<(), Box<dyn std::error::Error>> {
 
     // The same change the Settings screen makes, through the same layer.
     for target in SUPPORTED_LANGUAGES {
-        let mut settings = eclyzer_bridge_lib::state::load_settings(&paths)?;
+        let mut settings = eclink_lib::state::load_settings(&paths)?;
         settings.language = target.to_string();
-        eclyzer_bridge_lib::state::save_settings(&paths, &settings)?;
+        eclink_lib::state::save_settings(&paths, &settings)?;
 
         // Read it back from disk, which is what a restart does.
-        let reloaded = eclyzer_bridge_lib::state::load_settings(&paths)?;
+        let reloaded = eclink_lib::state::load_settings(&paths)?;
         let ok = reloaded.language == target;
         println!(
             "  set {target:<3} -> read back {:<3} {}",
@@ -78,7 +78,7 @@ fn language() -> Result<(), Box<dyn std::error::Error>> {
         serde_json::to_string_pretty(&value)?
     };
     std::fs::write(paths.root().join("app.json"), without)?;
-    let migrated = eclyzer_bridge_lib::state::load_settings(&paths)?;
+    let migrated = eclink_lib::state::load_settings(&paths)?;
     println!(
         "  file with no language key -> {} (expected en)",
         migrated.language
@@ -108,13 +108,13 @@ fn gateway(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     println!("key     : <{} chars>", key.len());
 
     for protocol in [
-        eclyzer_bridge_lib::profiles::ApiProtocol::AnthropicMessages,
-        eclyzer_bridge_lib::profiles::ApiProtocol::OpenAiResponses,
+        eclink_lib::profiles::ApiProtocol::AnthropicMessages,
+        eclink_lib::profiles::ApiProtocol::OpenAiResponses,
     ] {
         println!(
             "resolved {:?} -> {}",
             protocol,
-            eclyzer_bridge_lib::profiles::resolve_endpoint(&base_url, protocol)?
+            eclink_lib::profiles::resolve_endpoint(&base_url, protocol)?
         );
     }
 
@@ -153,17 +153,17 @@ fn gateway(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     // the Playground, or a user is told something works and then cannot use it. The
     // two used to hold separate parsers and disagreed about a streamed reply.
     for protocol in [
-        eclyzer_bridge_lib::profiles::ApiProtocol::AnthropicMessages,
-        eclyzer_bridge_lib::profiles::ApiProtocol::OpenAiResponses,
+        eclink_lib::profiles::ApiProtocol::AnthropicMessages,
+        eclink_lib::profiles::ApiProtocol::OpenAiResponses,
     ] {
-        let target = eclyzer_bridge_lib::testing::probes::ProbeTarget::new(
+        let target = eclink_lib::testing::probes::ProbeTarget::new(
             &base_url,
             &model,
             Secret::new(key.clone()),
             AuthMode::XApiKey,
             Some(30_000),
         )?;
-        match runtime.block_on(eclyzer_bridge_lib::testing::playground::send(
+        match runtime.block_on(eclink_lib::testing::playground::send(
             &target, "halo", protocol,
         )) {
             Ok(result) => println!(

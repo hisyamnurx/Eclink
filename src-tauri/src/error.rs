@@ -1,4 +1,4 @@
-//! Error taxonomy for Eclyzer Bridge.
+//! Error taxonomy for Eclink.
 //!
 //! Every variant carries user-actionable copy. The UI renders `message()` and
 //! `hint()` directly; raw upstream detail is preserved separately so the
@@ -214,9 +214,7 @@ impl From<std::io::Error> for BridgeError {
         // in the message and hint so the UI can still give useful guidance.
         let kind = ErrorKind::Io;
         let message = match err.kind() {
-            std::io::ErrorKind::PermissionDenied => {
-                "Eclyzer Bridge cannot write to the config file."
-            }
+            std::io::ErrorKind::PermissionDenied => "Eclink cannot write to the config file.",
             std::io::ErrorKind::NotFound => "The requested file or folder was not found.",
             _ => "A file operation failed.",
         };
@@ -240,7 +238,7 @@ impl From<serde_json::Error> for BridgeError {
         Self {
             kind: ErrorKind::ConfigInvalid,
             message: "Configuration issue detected.".to_string(),
-            hint: Some("Eclyzer Bridge won't modify this file until it can be read safely.".into()),
+            hint: Some("Eclink won't modify this file until it can be read safely.".into()),
             details: Some(crate::diagnostics::redact::redact_text(&err.to_string())),
             code: None,
         }
@@ -259,7 +257,7 @@ impl From<reqwest::Error> for BridgeError {
             Self::network("Could not connect to the provider.")
                 .with_hint("Check the base URL and your network connection.")
         } else if err.is_decode() {
-            Self::network("The provider returned a response Eclyzer Bridge could not read.")
+            Self::network("The provider returned a response Eclink could not read.")
                 .with_hint("The endpoint may not speak this API format.")
         } else {
             Self::network("The request to the provider failed.")

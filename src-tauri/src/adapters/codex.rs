@@ -15,7 +15,7 @@
 //! * custom providers use `wire_api = "responses"`.
 //!
 //! Bridge therefore writes an `[auth]` command pointing at
-//! `eclyzer-bridge-helper.exe` so the API key never lands in `config.toml`
+//! `eclink-helper.exe` so the API key never lands in `config.toml`
 //! (PRD Â§13.4, Â§16.5), and it never writes a bearer token inline.
 
 use std::path::{Path, PathBuf};
@@ -226,10 +226,10 @@ impl CodexAdapter {
         if let Some(expected) = &options.expected_sha256 {
             let actual = snapshot.sha256.clone().unwrap_or_else(|| sha256_hex(b""));
             if &actual != expected {
-                return Err(BridgeError::config_conflict(
-                    "Configuration changed outside Eclyzer Bridge.",
-                )
-                .with_hint("Reload the latest configuration before applying changes."));
+                return Err(
+                    BridgeError::config_conflict("Configuration changed outside Eclink.")
+                        .with_hint("Reload the latest configuration before applying changes."),
+                );
             }
         }
 
@@ -270,7 +270,7 @@ impl CodexAdapter {
             // with a half-applied config (PRD Â§24).
             let _ = write_atomic(&path, snap.content.as_bytes());
             return Err(BridgeError::internal(
-                "Eclyzer Bridge could not verify the updated Codex configuration.",
+                "Eclink could not verify the updated Codex configuration.",
             )
             .with_hint("Your previous configuration was restored."));
         }
@@ -332,7 +332,7 @@ impl CodexAdapter {
     }
 }
 
-/// Whether a provider ID is owned by Eclyzer Bridge.
+/// Whether a provider ID is owned by Eclink.
 pub fn is_managed_provider_id(id: &str) -> bool {
     id.starts_with(MANAGED_PROVIDER_PREFIX)
 }
@@ -370,7 +370,7 @@ impl AgentAdapter for CodexAdapter {
 
         let note = match &version {
             Some(v) if !detect::version_at_least(v, AUTH_COMMAND_MIN_VERSION) => Some(format!(
-                "Codex {v} is older than {}.{}.{}. Eclyzer Bridge will use an environment-based credential instead of a credential helper.",
+                "Codex {v} is older than {}.{}.{}. Eclink will use an environment-based credential instead of a credential helper.",
                 AUTH_COMMAND_MIN_VERSION.0, AUTH_COMMAND_MIN_VERSION.1, AUTH_COMMAND_MIN_VERSION.2
             )),
             _ => None,
@@ -422,7 +422,7 @@ impl AgentAdapter for CodexAdapter {
                 snapshot.path.display()
             ))
             .with_hint(
-                "Eclyzer Bridge won't modify this file until it can be read safely. Fix the syntax or restore a backup.",
+                "Eclink won't modify this file until it can be read safely. Fix the syntax or restore a backup.",
             )
             .with_details(snapshot.parse_error.clone().unwrap_or_default()));
         }
@@ -451,7 +451,7 @@ impl AgentAdapter for CodexAdapter {
                 profile_name: doc.provider_str(id, "name").or_else(|| Some(id.clone())),
                 label: doc
                     .provider_str(id, "name")
-                    .unwrap_or_else(|| "Eclyzer Bridge provider".to_string()),
+                    .unwrap_or_else(|| "Eclink provider".to_string()),
                 provider_id: provider.clone(),
                 model,
             }),
@@ -491,7 +491,7 @@ impl AgentAdapter for CodexAdapter {
                 "Managed configuration detected.",
             )
             .with_hint(
-                "Codex is managed by an organization policy that Eclyzer Bridge cannot verify. Ask your administrator before changing provider settings.",
+                "Codex is managed by an organization policy that Eclink cannot verify. Ask your administrator before changing provider settings.",
             ));
         };
 
@@ -509,7 +509,7 @@ impl AgentAdapter for CodexAdapter {
                 "Managed configuration detected.",
             )
             .with_hint(
-                "The model provider is controlled by your organization and cannot be changed by Eclyzer Bridge.",
+                "The model provider is controlled by your organization and cannot be changed by Eclink.",
             ));
         }
 
@@ -635,7 +635,7 @@ impl AgentAdapter for CodexAdapter {
             .read_original(AgentId::Codex.as_str())?
             .ok_or_else(|| {
                 BridgeError::internal("There is no original backup to restore for Codex.")
-                    .with_hint("Eclyzer Bridge has not modified Codex yet.")
+                    .with_hint("Eclink has not modified Codex yet.")
             })?;
 
         // Snapshot the current state first so this restore is itself reversible
@@ -652,7 +652,7 @@ impl AgentAdapter for CodexAdapter {
         // would be worse than failing.
         CodexToml::parse(&content).map_err(|err| {
             BridgeError::internal("The original Codex backup is not valid TOML.")
-                .with_hint("Eclyzer Bridge did not write it. Use Restore OpenAI Default instead.")
+                .with_hint("Eclink did not write it. Use Restore OpenAI Default instead.")
                 .with_details(err.message)
         })?;
 
@@ -936,15 +936,12 @@ persistence = "none"
             "m".into(),
             vec![AgentId::Codex],
         );
-        let helper = r"C:\Program Files\Eclyzer Bridge\eclyzer-bridge-helper.exe";
+        let helper = r"C:\Program Files\Eclink\eclink-helper.exe";
         let spec =
             CodexAdapter::provider_spec(&profile, "https://x/v1", Some(helper), true, None, &[]);
 
         let auth = spec.auth_command.expect("auth command expected");
-        assert_eq!(
-            auth.command,
-            r"C:\Program Files\Eclyzer Bridge\eclyzer-bridge-helper.exe"
-        );
+        assert_eq!(auth.command, r"C:\Program Files\Eclink\eclink-helper.exe");
         assert_eq!(auth.args, vec!["secret", "resolve", profile.id.as_str()]);
         assert!(
             spec.env_key.is_none(),

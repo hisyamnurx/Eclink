@@ -229,7 +229,7 @@ pub struct SpawnPlan {
 
 /// Spawn the process described by `plan`.
 ///
-/// The child is detached from Bridge: closing Eclyzer Bridge must not kill the
+/// The child is detached from Bridge: closing Eclink must not kill the
 /// coding agent the user just opened (PRD §84).
 pub fn spawn(plan: &SpawnPlan) -> BridgeResult<u32> {
     let mut command = std::process::Command::new(&plan.program);

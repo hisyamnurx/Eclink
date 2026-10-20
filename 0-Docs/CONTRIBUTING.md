@@ -1,4 +1,4 @@
-# Contributing to Eclyzer Bridge
+# Contributing to Eclink
 
 Thanks for wanting to help. This project edits other people's configuration
 files and handles their API keys, so the bar for care is higher than usual and
@@ -22,8 +22,8 @@ the rules below are not stylistic preferences.
 ## Setup and commands
 
 ```powershell
-git clone https://github.com/hisyamnurx/Eclyzer-Bridge.git
-cd Eclyzer-Bridge
+git clone https://github.com/hisyamnurx/Eclink.git
+cd Eclink
 npm install
 ```
 

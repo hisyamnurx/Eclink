@@ -410,7 +410,7 @@ pub async fn duplicate_profile(
         })?;
 
         tracing::info!(
-            target: "eclyzer_bridge",
+            target: "eclink",
             source_profile = %source.id,
             "profile duplicated"
         );

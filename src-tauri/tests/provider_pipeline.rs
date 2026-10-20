@@ -16,12 +16,12 @@ use std::sync::mpsc::{channel, Receiver};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use eclyzer_bridge_lib::profiles::AuthMode;
-use eclyzer_bridge_lib::testing::probes::{
+use eclink_lib::profiles::AuthMode;
+use eclink_lib::testing::probes::{
     probe_authentication, probe_claude_protocol, probe_codex_protocol, probe_model,
     probe_reachability, probe_streaming, probe_tool_calling, ProbeOutcome, ProbeTarget,
 };
-use eclyzer_bridge_lib::testing::Secret;
+use eclink_lib::testing::Secret;
 
 /// A canned HTTP response.
 #[derive(Debug, Clone)]
@@ -870,8 +870,8 @@ async fn a_very_large_error_body_is_truncated_rather_than_held_in_memory() {
 // here: one answers Anthropic Messages, the other only the OpenAI shape.
 // ---------------------------------------------------------------------------
 
-use eclyzer_bridge_lib::profiles::AgentId;
-use eclyzer_bridge_lib::testing::probes::{probe_protocols, Protocol};
+use eclink_lib::profiles::AgentId;
+use eclink_lib::testing::probes::{probe_protocols, Protocol};
 
 /// A server that answers one route and 404s the rest.
 ///
@@ -1084,7 +1084,7 @@ async fn the_authentication_step_uses_the_route_the_agent_requires() {
     // sent an Anthropic-shaped request, so testing Codex asked the wrong route,
     // and testing Claude Code against an OpenAI-shaped provider produced a 404
     // that was reported as an authentication failure.
-    use eclyzer_bridge_lib::testing::probes::{probe_authentication_for, Protocol};
+    use eclink_lib::testing::probes::{probe_authentication_for, Protocol};
 
     // A server that answers only the Responses route.
     let server = MockServer::start(vec![
@@ -1123,7 +1123,7 @@ async fn the_authentication_step_uses_the_route_the_agent_requires() {
 #[tokio::test]
 async fn a_rejected_key_is_still_reported_as_rejected_on_the_right_route() {
     // The fix must not swallow real authentication failures.
-    use eclyzer_bridge_lib::testing::probes::{probe_authentication_for, Protocol};
+    use eclink_lib::testing::probes::{probe_authentication_for, Protocol};
 
     let server = MockServer::start(vec![(
         "/v1/responses".into(),
@@ -1143,8 +1143,8 @@ async fn the_playground_posts_to_the_route_each_agent_uses() {
     // Claude" as Chat Completions, so a Codex profile was validated against a route
     // and body shape Codex cannot use. Codex removed `wire_api = "chat"` entirely
     // and builds its request from `url_for_path("/responses")`.
-    use eclyzer_bridge_lib::profiles::ApiProtocol;
-    use eclyzer_bridge_lib::testing::playground::send;
+    use eclink_lib::profiles::ApiProtocol;
+    use eclink_lib::testing::playground::send;
 
     let server = MockServer::start(vec![
         ("/v1/responses".into(), Response::json(200, OK_RESPONSES)),
@@ -1202,8 +1202,8 @@ async fn the_playground_reports_a_provider_error_rather_than_an_empty_reply() {
     // A route the provider does not serve must produce a message naming the
     // endpoint's own response, not "the provider returned an empty reply", which
     // sends the user looking at the model instead of at the API shape.
-    use eclyzer_bridge_lib::profiles::ApiProtocol;
-    use eclyzer_bridge_lib::testing::playground::send;
+    use eclink_lib::profiles::ApiProtocol;
+    use eclink_lib::testing::playground::send;
 
     let server = MockServer::start(vec![(
         "/v1/responses".into(),
@@ -1254,8 +1254,8 @@ async fn protocol_probing_does_not_leak_the_key_into_the_capability_report() {
 // reads are all covered — not just the individual probe.
 // ---------------------------------------------------------------------------
 
-use eclyzer_bridge_lib::profiles::{AdvancedOptions, CompatibilityStatus, Profile};
-use eclyzer_bridge_lib::testing::pipeline::{test_profile, TestOutcome};
+use eclink_lib::profiles::{AdvancedOptions, CompatibilityStatus, Profile};
+use eclink_lib::testing::pipeline::{test_profile, TestOutcome};
 
 /// A profile pointed at a local mock server.
 fn profile_for(base_url: &str, model: &str, agent: AgentId) -> Profile {
@@ -1348,11 +1348,7 @@ async fn provider_b_shaped_provider_is_reported_as_the_wrong_protocol_for_claude
         ("/v1/chat/completions".into(), Response::json(200, OK_CHAT)),
         ("/v1/models".into(), Response::json(200, MODELS_OK)),
     ]);
-    let profile = profile_for(
-        &server.base_url,
-        "vendor_a/example-model",
-        AgentId::Claude,
-    );
+    let profile = profile_for(&server.base_url, "vendor_a/example-model", AgentId::Claude);
 
     let outcome = test_profile(&profile, AgentId::Claude, Secret::new("sk-test"))
         .await
@@ -1797,9 +1793,9 @@ async fn the_anthropic_route_resolves_exactly_for_a_local_gateway() {
         ),
     ] {
         assert_eq!(
-            eclyzer_bridge_lib::profiles::resolve_endpoint(
+            eclink_lib::profiles::resolve_endpoint(
                 base,
-                eclyzer_bridge_lib::profiles::ApiProtocol::AnthropicMessages
+                eclink_lib::profiles::ApiProtocol::AnthropicMessages
             )
             .expect("resolves"),
             expected,
@@ -1868,8 +1864,8 @@ const SSE_ANTHROPIC_ERROR: &str = concat!(
     "data: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Upstream is overloaded\"}}\n\n",
 );
 
-use eclyzer_bridge_lib::profiles::ApiProtocol;
-use eclyzer_bridge_lib::testing::playground::send;
+use eclink_lib::profiles::ApiProtocol;
+use eclink_lib::testing::playground::send;
 
 fn playground_target(server: &MockServer, model: &str) -> ProbeTarget {
     ProbeTarget::new(

@@ -141,7 +141,7 @@ const MANAGED_SETTINGS_PATHS: [&str; 2] = [
     "/Library/Application Support/ClaudeCode/managed-settings.json",
 ];
 
-/// Whether a family-alias or default-model value is one Eclyzer Bridge wrote.
+/// Whether a family-alias or default-model value is one Eclink wrote.
 ///
 /// Ownership has to be *proved* rather than assumed, because these variables can
 /// also be set by hand or by an administrator, and deleting the user's own
@@ -150,7 +150,7 @@ const MANAGED_SETTINGS_PATHS: [&str; 2] = [
 /// Two independent pieces of evidence count:
 ///
 /// * the value names the model being activated, which is what Bridge writes; or
-/// * the value carries an Eclyzer Bridge provider prefix.
+/// * the value carries an Eclink provider prefix.
 ///
 /// A `[1m]` context suffix is ignored when comparing, because Claude Code accepts
 /// it on these variables and treats the rest as the model ID.
@@ -314,7 +314,7 @@ fn stock_reset_keys(doc: &mut ClaudeJson) -> Vec<String> {
 /// Decide whether an organization-managed settings document blocks changes.
 ///
 /// Extracted from the adapter so the policy gate can be tested directly. This is
-/// the check that decides whether Eclyzer Bridge is allowed to touch provider
+/// the check that decides whether Eclink is allowed to touch provider
 /// settings at all, and it previously had no test that actually ran it: the
 /// tests that appeared to cover it re-implemented the `allowedProviders`
 /// expression and asserted their own transcription.
@@ -328,7 +328,7 @@ fn evaluate_managed_policy(raw: &str, path: &Path) -> BridgeResult<()> {
         // blocking rather than risk bypassing policy.
         return Err(
             BridgeError::managed_policy("Managed configuration detected.").with_hint(format!(
-                "Claude Code is managed by an organization policy at {}. Eclyzer Bridge cannot verify it. Ask your administrator before changing provider settings.",
+                "Claude Code is managed by an organization policy at {}. Eclink cannot verify it. Ask your administrator before changing provider settings.",
                 path.display()
             )),
         );
@@ -338,7 +338,7 @@ fn evaluate_managed_policy(raw: &str, path: &Path) -> BridgeResult<()> {
     if doc.env_get(BASE_URL_VAR).is_some() || doc.env_get(AUTH_TOKEN_VAR).is_some() {
         return Err(
             BridgeError::managed_policy("Managed configuration detected.").with_hint(format!(
-                "Claude Code's provider settings are controlled by your organization at {}. Eclyzer Bridge cannot change them.",
+                "Claude Code's provider settings are controlled by your organization at {}. Eclink cannot change them.",
                 path.display()
             )),
         );
@@ -360,7 +360,7 @@ fn evaluate_managed_policy(raw: &str, path: &Path) -> BridgeResult<()> {
         if !permits_custom {
             return Err(
                 BridgeError::managed_policy("Managed configuration detected.").with_hint(format!(
-                    "Your organization's policy at {} does not allow a custom endpoint, so Eclyzer Bridge cannot apply a profile.",
+                    "Your organization's policy at {} does not allow a custom endpoint, so Eclink cannot apply a profile.",
                     path.display()
                 )),
             );
@@ -423,7 +423,7 @@ impl ClaudeAdapter {
         doc.env_get(key).map(str::to_string)
     }
 
-    /// Remove every setting Eclyzer Bridge owns, leaving the user's own alone.
+    /// Remove every setting Eclink owns, leaving the user's own alone.
     ///
     /// Removes:
     ///
@@ -531,10 +531,10 @@ impl ClaudeAdapter {
         if let Some(expected) = &options.expected_sha256 {
             let actual = snapshot.sha256.clone().unwrap_or_else(|| sha256_hex(b""));
             if &actual != expected {
-                return Err(BridgeError::config_conflict(
-                    "Configuration changed outside Eclyzer Bridge.",
-                )
-                .with_hint("Reload the latest configuration before applying changes."));
+                return Err(
+                    BridgeError::config_conflict("Configuration changed outside Eclink.")
+                        .with_hint("Reload the latest configuration before applying changes."),
+                );
             }
         }
 
@@ -580,7 +580,7 @@ impl ClaudeAdapter {
             // Roll back so the user is never left half-applied (PRD §24).
             let _ = write_atomic(&path, snap.content.as_bytes());
             return Err(BridgeError::internal(
-                "Eclyzer Bridge could not verify the updated Claude Code settings.",
+                "Eclink could not verify the updated Claude Code settings.",
             )
             .with_hint("Your previous configuration was restored."));
         }
@@ -655,7 +655,7 @@ pub struct ModelOverride {
     /// Where it came from, when it is a file.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
-    /// Whether Eclyzer Bridge is allowed to change it.
+    /// Whether Eclink is allowed to change it.
     pub changeable: bool,
     /// What the user can do about it.
     pub hint: String,
@@ -726,7 +726,7 @@ pub fn effective_model(project_dir: Option<&Path>) -> EffectiveClaudeModel {
             changeable: false,
             hint: format!(
                 "{MODEL_VAR} is set in your environment and outranks your settings file. \
-                 Eclyzer Bridge will not change an environment variable for you. Remove it \
+                 Eclink will not change an environment variable for you. Remove it \
                  from your shell profile, or unset it for this terminal, then launch again."
             ),
         });
@@ -742,7 +742,7 @@ pub fn effective_model(project_dir: Option<&Path>) -> EffectiveClaudeModel {
                 model,
                 path: Some(path.display().to_string()),
                 changeable: false,
-                hint: "Your organization manages this setting. Eclyzer Bridge will not change \
+                hint: "Your organization manages this setting. Eclink will not change \
                        it. Ask your administrator if it should be different."
                     .into(),
             });
@@ -801,7 +801,7 @@ pub fn effective_model(project_dir: Option<&Path>) -> EffectiveClaudeModel {
             model: Some(first.model.clone()),
             source: first.source.clone(),
             description: format!(
-                "{} is overriding the model Eclyzer Bridge configured ({}).",
+                "{} is overriding the model Eclink configured ({}).",
                 first.label, first.model
             ),
             overrides,
@@ -812,7 +812,7 @@ pub fn effective_model(project_dir: Option<&Path>) -> EffectiveClaudeModel {
         Some(model) => EffectiveClaudeModel {
             model: Some(model.clone()),
             source: "bridge".into(),
-            description: format!("Eclyzer Bridge selected {model} in your user settings."),
+            description: format!("Eclink selected {model} in your user settings."),
             overrides,
         },
         None => match default_var {
@@ -915,7 +915,7 @@ impl AgentAdapter for ClaudeAdapter {
                 snapshot.path.display()
             ))
             .with_hint(
-                "Eclyzer Bridge won't modify this file until it can be read safely. Fix the syntax or restore a backup.",
+                "Eclink won't modify this file until it can be read safely. Fix the syntax or restore a backup.",
             )
             .with_details(snapshot.parse_error.clone().unwrap_or_default()));
         }
@@ -1034,8 +1034,8 @@ impl AgentAdapter for ClaudeAdapter {
                 managed.push(format!("env.{MODEL_VAR}"));
             }
             // A family alias is only removable when it is recognisably
-            // Bridge-shaped: it names the very model being activated, or it
-            // carries an Eclyzer provider prefix. A hand-written value that
+            // Eclink-shaped: it names the very model being activated, or it
+            // carries the managed provider prefix. A hand-written value that
             // happens to differ is the user's, and must survive.
             for key in FAMILY_ALIAS_VARS {
                 let Some(existing) = doc.env_get(key).map(str::to_string) else {
@@ -1100,7 +1100,7 @@ impl AgentAdapter for ClaudeAdapter {
             .read_original(AgentId::Claude.as_str())?
             .ok_or_else(|| {
                 BridgeError::internal("There is no original backup to restore for Claude Code.")
-                    .with_hint("Eclyzer Bridge has not modified Claude Code yet.")
+                    .with_hint("Eclink has not modified Claude Code yet.")
             })?;
 
         // Snapshot the current state first so this restore is itself reversible
@@ -1118,9 +1118,7 @@ impl AgentAdapter for ClaudeAdapter {
         if !content.trim().is_empty() {
             ClaudeJson::parse(&content).map_err(|err| {
                 BridgeError::internal("The original Claude Code backup is not valid JSON.")
-                    .with_hint(
-                        "Eclyzer Bridge did not write it. Use Restore Claude Default instead.",
-                    )
+                    .with_hint("Eclink did not write it. Use Restore Claude Default instead.")
                     .with_details(err.message)
             })?;
         }

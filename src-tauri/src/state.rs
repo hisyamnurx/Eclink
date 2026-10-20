@@ -27,7 +27,7 @@ pub fn load_settings(paths: &AppPaths) -> BridgeResult<AppSettings> {
         Ok(value) => value,
         Err(err) => {
             tracing::warn!(
-                target: "eclyzer_bridge",
+                target: "eclink",
                 error = %err,
                 "app.json is unreadable; continuing with defaults"
             );
@@ -47,7 +47,7 @@ pub fn load_settings(paths: &AppPaths) -> BridgeResult<AppSettings> {
         Ok(settings) => settings,
         Err(err) => {
             tracing::warn!(
-                target: "eclyzer_bridge",
+                target: "eclink",
                 error = %err,
                 "app.json has an unexpected value; falling back to defaults for the affected field"
             );
@@ -61,7 +61,7 @@ pub fn load_settings(paths: &AppPaths) -> BridgeResult<AppSettings> {
         // v0 == no version field; the shape is identical, so bumping the stamp
         // is the whole migration. Future versions add explicit steps here.
         tracing::info!(
-            target: "eclyzer_bridge",
+            target: "eclink",
             from = version,
             to = APP_SETTINGS_SCHEMA_VERSION,
             "migrating app.json"
@@ -133,7 +133,7 @@ fn settings_from_lenient(raw: &str, error: &str) -> AppSettings {
     }
 
     tracing::warn!(
-        target: "eclyzer_bridge",
+        target: "eclink",
         detail = %error,
         "recovered application settings leniently"
     );

@@ -1,9 +1,9 @@
-//! `eclyzer-bridge-helper` — stateless credential resolver.
+//! `eclink-helper` — stateless credential resolver.
 //!
 //! Contract (PRD §13.4):
 //!
 //! ```text
-//! eclyzer-bridge-helper secret resolve <profile-id>
+//! eclink-helper secret resolve <profile-id>
 //! ```
 //!
 //! Behaviour:
@@ -77,7 +77,7 @@ fn run() -> i32 {
             }
         },
         _ => {
-            fail("usage: eclyzer-bridge-helper secret resolve <profile-id>");
+            fail("usage: eclink-helper secret resolve <profile-id>");
             EXIT_FAILURE
         }
     }
@@ -85,14 +85,27 @@ fn run() -> i32 {
 
 /// Write a diagnostic and return. Never includes secret material.
 fn fail(message: &str) {
-    let _ = writeln!(std::io::stderr(), "eclyzer-bridge-helper: {message}");
+    let _ = writeln!(std::io::stderr(), "eclink-helper: {message}");
 }
+
+/// The data directory name shared with the main application.
+///
+/// Deliberately still `EclyzerBridge`: this is the directory every existing
+/// installation already writes its profiles, snapshots and `secrets.dat` into.
+/// Renaming it would strand that data. See `docs/legacy-compatibility.md`.
+const APP_DATA_DIR_NAME: &str = "EclyzerBridge";
+
+/// Environment override used by tests and by a non-default install location.
+///
+/// The legacy variable name is still read so an existing Codex `auth.command`
+/// that passes `ECLYZER_BRIDGE_DATA_DIR` keeps resolving credentials.
+const LEGACY_DATA_DIR_ENV: &str = "ECLYZER_BRIDGE_DATA_DIR";
 
 /// Locate `secrets.dat` next to the application data root.
 fn secrets_path() -> Result<PathBuf, String> {
     // An explicit override keeps the helper usable from tests and from a
     // non-default install location.
-    if let Ok(path) = std::env::var("ECLYZER_BRIDGE_DATA_DIR") {
+    if let Ok(path) = std::env::var(LEGACY_DATA_DIR_ENV) {
         let trimmed = path.trim();
         if !trimmed.is_empty() {
             return Ok(PathBuf::from(trimmed).join("secrets.dat"));
@@ -102,7 +115,7 @@ fn secrets_path() -> Result<PathBuf, String> {
         .ok_or_else(|| "could not determine the application data directory".to_string())?;
     Ok(base
         .data_local_dir()
-        .join("EclyzerBridge")
+        .join(APP_DATA_DIR_NAME)
         .join("secrets.dat"))
 }
 

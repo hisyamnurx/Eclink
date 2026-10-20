@@ -89,7 +89,7 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> BridgeResult<()> {
     std::fs::create_dir_all(parent)?;
 
     let mut temp = tempfile::Builder::new()
-        .prefix(".eclyzer-bridge-")
+        .prefix(".eclink-")
         .suffix(".tmp")
         .tempfile_in(parent)
         .map_err(|err| {
@@ -119,10 +119,10 @@ pub fn write_atomic(path: &Path, contents: &[u8]) -> BridgeResult<()> {
     // Verify: a successful rename that wrote wrong bytes is still a failure.
     let written = std::fs::read(path)?;
     if written != contents {
-        return Err(BridgeError::io(
-            "The configuration file did not match what Eclyzer Bridge wrote.",
-        )
-        .with_hint("Another program may be modifying this file."));
+        return Err(
+            BridgeError::io("The configuration file did not match what Eclink wrote.")
+                .with_hint("Another program may be modifying this file."),
+        );
     }
 
     Ok(())
@@ -207,7 +207,7 @@ impl FileLock {
                 // agent's configuration. Refusing is the safe behaviour: writing
                 // concurrently could interleave two patches.
                 Err(BridgeError::locked(
-                    "Another Eclyzer Bridge operation is already changing this configuration.",
+                    "Another Eclink operation is already changing this configuration.",
                 )
                 .with_hint("Wait for it to finish, then try again."))
             }
@@ -252,11 +252,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let file = dir.path().join("config.toml");
         write_atomic(&file, b"a = 1\n").unwrap();
+        // Assert on the property, not on the prefix: after the write only the
+        // destination may remain. Matching a literal prefix would pass if the
+        // prefix changed and a temp file were left under a different name.
         let leftovers: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .flatten()
             .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|n| n.contains(".eclyzer-bridge-"))
+            .filter(|n| n != "config.toml")
             .collect();
         assert!(leftovers.is_empty(), "temp files left: {leftovers:?}");
     }

@@ -28,10 +28,10 @@
 
 use std::path::PathBuf;
 
-use eclyzer_bridge_lib::adapters::claude::{effective_model, ClaudeAdapter, MODEL_SETTINGS_KEY};
-use eclyzer_bridge_lib::adapters::{AgentAdapter, ApplyOptions};
-use eclyzer_bridge_lib::backup::BackupManager;
-use eclyzer_bridge_lib::profiles::{AgentId, AuthMode, Profile};
+use eclink_lib::adapters::claude::{effective_model, ClaudeAdapter, MODEL_SETTINGS_KEY};
+use eclink_lib::adapters::{AgentAdapter, ApplyOptions};
+use eclink_lib::backup::BackupManager;
+use eclink_lib::profiles::{AgentId, AuthMode, Profile};
 
 fn verify_dir() -> PathBuf {
     let raw = std::env::var("ECLYZER_VERIFY_DIR")
@@ -85,7 +85,7 @@ fn profile() -> Profile {
     p
 }
 
-use eclyzer_bridge_lib::profiles::AdvancedOptions;
+use eclink_lib::profiles::AdvancedOptions;
 
 #[test]
 #[ignore = "reads ECLYZER_VERIFY_DIR; run deliberately"]

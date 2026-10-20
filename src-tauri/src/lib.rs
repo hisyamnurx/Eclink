@@ -1,6 +1,6 @@
-//! Eclyzer Bridge — a local configuration bridge for AI coding CLIs.
+//! Eclink — a local configuration bridge for AI coding CLIs.
 //!
-//! Eclyzer Bridge lets a user point Codex or Claude Code at an OpenAI-compatible
+//! Eclink lets a user point Codex or Claude Code at an OpenAI-compatible
 //! or Anthropic-compatible provider, without hand-editing `config.toml` or
 //! `settings.json` and without pasting an API key into a file that is easy to
 //! commit by accident.
@@ -41,12 +41,19 @@ pub use error::{BridgeError, BridgeResult};
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Project home, opened only when the user asks.
-pub const REPO_URL: &str = "https://github.com/hisyamnurx/Eclyzer-Bridge";
+pub const REPO_URL: &str = "https://github.com/hisyamnurx/Eclink";
 
-/// Prefix that makes a provider entry recognizably Bridge-owned.
+/// Prefix that makes a provider entry recognizably Eclink-owned.
 ///
-/// This prefix is what lets `restore_default` remove exactly Bridge's own
+/// This prefix is what lets `restore_default` remove exactly Eclink's own
 /// entries and never a provider the user added (PRD §16.3).
+///
+/// It keeps the pre-rename spelling on purpose. Every provider Eclink has ever
+/// written into a user's `config.toml` carries this exact prefix, and the
+/// ownership check is a string comparison against it. Renaming the prefix would
+/// make Eclink treat its own entries as the user's, so `restore_default` would
+/// stop removing them and `get_active_profile` would stop recognizing them.
+/// See `docs/legacy-compatibility.md`.
 pub const MANAGED_PROVIDER_PREFIX: &str = "eclyzer_bridge_";
 
 /// Start the desktop application.
@@ -79,7 +86,7 @@ pub fn run() {
         .run(tauri::generate_context!())
         .unwrap_or_else(|err| {
             report_startup_failure(
-                &BridgeError::internal("Eclyzer Bridge could not open its window.")
+                &BridgeError::internal("Eclink could not open its window.")
                     .with_details(err.to_string()),
             );
         });
@@ -107,7 +114,7 @@ fn show_error_dialog(message: &str) {
     use windows::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
     let text = HSTRING::from(message);
-    let caption = HSTRING::from("Eclyzer Bridge");
+    let caption = HSTRING::from("Eclink");
     // SAFETY: both HSTRINGs outlive the call, and a null owner window is
     // explicitly permitted for a modal message box. The return value is ignored
     // deliberately, since there is nothing useful to do if it fails.

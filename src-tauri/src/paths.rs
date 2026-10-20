@@ -1,4 +1,4 @@
-//! Filesystem locations used by Eclyzer Bridge.
+//! Filesystem locations used by Eclink.
 //!
 //! All application data lives under `%LOCALAPPDATA%\EclyzerBridge\` (PRD §12).
 //! Nothing is written during installation; directories are created lazily on
@@ -68,7 +68,7 @@ impl AppPaths {
         self.root.join("cache")
     }
 
-    /// Create every directory Eclyzer Bridge owns.
+    /// Create every directory Eclink owns.
     pub fn ensure_dirs(&self) -> BridgeResult<()> {
         for dir in [
             self.root.clone(),
@@ -78,7 +78,7 @@ impl AppPaths {
         ] {
             std::fs::create_dir_all(&dir).map_err(|err| {
                 BridgeError::io(format!(
-                    "Could not create the Eclyzer Bridge data folder: {}",
+                    "Could not create the Eclink data folder: {}",
                     dir.display()
                 ))
                 .with_details(err.to_string())

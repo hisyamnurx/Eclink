@@ -5,14 +5,60 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-> **Eclyzer Bridge is an independent open-source project and is not affiliated
+> **Eclink is an independent open-source project and is not affiliated
 > with, endorsed by, or sponsored by OpenAI or Anthropic.**
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-20
+
+The rebranding release. **Eclyzer Bridge is now Eclink.** This release changes the
+name, the installer, and the Windows application identity. It is not a rewrite:
+the features, the configuration handling, and the data model are the same.
+
+### Changed
+
+- **The product is called Eclink.** Window title, sidebar wordmark, About and
+  Settings copy, dialogs, notifications, diagnostics output and both language
+  dictionaries now say Eclink. The English and Indonesian dictionaries were both
+  updated; the brand name is not translated.
+- **Windows identity.** The executable is `eclink.exe`, the installer is
+  `Eclink-Setup-<version>.exe`, the install directory is `%LOCALAPPDATA%\Eclink`,
+  and the Start Menu and Add/Remove Programs entries read "Eclink". The bundle
+  identifier is unchanged so Windows still recognizes the existing installation.
+- **The credential helper is `eclink-helper.exe`.** The old
+  `eclyzer-bridge-helper.exe` is still accepted as a fallback, so a Codex
+  configuration written before the rename keeps resolving credentials.
+- **Repository moved** to <https://github.com/hisyamnurx/Eclink>. The updater
+  endpoint follows it. The updater signing key is unchanged, so an installed
+  build still verifies updates with the key it already trusts.
+- **Publisher metadata** is now "Eclink contributors".
+
+### Added
+
+- **A safe upgrade path from Eclyzer Bridge.** Existing profiles, DPAPI-sealed
+  API keys, backups, snapshots and history are read from the unchanged data
+  directory, so an upgrade does not require re-entering keys or recreating
+  profiles. The language preference survives.
+- **An installer hook** that retires the legacy "Eclyzer Bridge" uninstall
+  registry entry once its executable is gone, so one application does not appear
+  twice in Add/Remove Programs. If the old installation is still present, the
+  entry is left alone rather than removed under a live installation.
+- **[docs/legacy-compatibility.md](../docs/legacy-compatibility.md)**, which lists
+  every identifier intentionally kept from the previous name and what depends on
+  it, so a later cleanup cannot silently break upgraded installations.
+- **Regression tests** covering the retained identifiers and the upgrade path.
+
+### Notes
+
+- Application data stays in `%LOCALAPPDATA%\EclyzerBridge` on purpose. Renaming
+  it would strand the DPAPI blob and every existing profile.
+- Old log files are not rewritten. They keep their name and are pruned by the
+  normal retention window.
+
 ## [0.1.0] - 2025-10-06
 
-The initial release.
+The initial release, published as **Eclyzer Bridge**.
 
 ### Added
 
@@ -113,5 +159,6 @@ The initial release.
 
 - **The app does not run in the background.** Closing the window exits it.
 
-[Unreleased]: https://github.com/hisyamnurx/Eclyzer-Bridge/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/hisyamnurx/Eclyzer-Bridge/releases/tag/v0.1.0
+[Unreleased]: https://github.com/hisyamnurx/Eclink/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/hisyamnurx/Eclink/releases/tag/v0.2.0
+[0.1.0]: https://github.com/hisyamnurx/Eclink/releases/tag/v0.1.0

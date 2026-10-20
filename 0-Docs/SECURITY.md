@@ -2,13 +2,14 @@
 
 ## Scope
 
-Eclyzer Bridge configures other programs, so it is worth being precise about
+Eclink configures other programs, so it is worth being precise about
 what this policy covers.
 
 **In scope.** Vulnerabilities in this project and its code:
 
-- the Eclyzer Bridge desktop application;
-- the bundled credential helper (`eclyzer-bridge-helper.exe`) and how it reads
+- the Eclink desktop application;
+- the bundled credential helper (`eclink-helper.exe`, and the pre-rename
+  `eclyzer-bridge-helper.exe` it still accepts) and how it reads
   and returns a stored credential;
 - the configuration-writing logic — parsing, patching, verifying, and restoring
   agent configuration files;
@@ -42,7 +43,7 @@ would use it.
 
 Report privately through GitHub Security Advisories:
 
-<https://github.com/hisyamnurx/Eclyzer-Bridge/security/advisories/new>
+<https://github.com/hisyamnurx/Eclink/security/advisories/new>
 
 That channel is private between you and the maintainers until an advisory is
 published. If you cannot use it, open a normal issue that says only that you
@@ -68,7 +69,7 @@ details, the steps, or any exploit in the issue itself.
 
 The more precisely you can describe the conditions, the faster this goes:
 
-- the **Eclyzer Bridge version** (shown in the app, and in the diagnostics
+- the **Eclink version** (shown in the app, and in the diagnostics
   report);
 - your **Windows version** and architecture;
 - **steps to reproduce**, in order, starting from a known state;

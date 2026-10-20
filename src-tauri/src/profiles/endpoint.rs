@@ -600,7 +600,11 @@ mod tests {
     #[test]
     fn the_real_provider_urls_from_the_report_resolve_correctly() {
         assert_eq!(
-            resolve_endpoint("https://gateway.example.com", ApiProtocol::AnthropicMessages).unwrap(),
+            resolve_endpoint(
+                "https://gateway.example.com",
+                ApiProtocol::AnthropicMessages
+            )
+            .unwrap(),
             "https://gateway.example.com/v1/messages"
         );
         // This one is the case that produced `404 Route POST:/v1/messages not
@@ -612,6 +616,9 @@ mod tests {
         )
         .unwrap();
         assert_eq!(provider_b, "https://router.example.com/v1/messages");
-        assert!(!provider_b.contains("/v1/v1/"), "the reported 404 cause is back");
+        assert!(
+            !provider_b.contains("/v1/v1/"),
+            "the reported 404 cause is back"
+        );
     }
 }

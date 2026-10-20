@@ -30,7 +30,7 @@ impl ClaudeJson {
                 err.column()
             ))
             .with_hint(
-                "Eclyzer Bridge won't modify this file until it can be read safely. Fix the syntax or restore a backup.",
+                "Eclink won't modify this file until it can be read safely. Fix the syntax or restore a backup.",
             )
             .with_details(err.to_string())
         })?;

@@ -164,7 +164,7 @@ export const KNOWN_REASON_CODES = Object.keys(REASON_TEXTS);
  * and half English: "Request gagal. The provider's reply was not in the format this
  * endpoint should use."
  *
- * Only errors whose text is Eclyzer Bridge's *own* explanation belong here. A
+ * Only errors whose text is Eclink's *own* explanation belong here. A
  * provider's or server's raw words are never in this table, because translating
  * them would mean inventing meaning: they are shown as-is under the technical
  * details, which the interface labels as such.

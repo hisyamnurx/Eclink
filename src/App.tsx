@@ -68,7 +68,7 @@ function Shell() {
           <ErrorState
             error={
               new Error(
-                "Eclyzer Bridge is not connected to its backend. Open the desktop app rather than this page in a browser.",
+                "Eclink is not connected to its backend. Open the desktop app rather than this page in a browser.",
               )
             }
           />
@@ -110,7 +110,7 @@ function Shell() {
             height={36}
           />
           <div>
-            <div className="sidebar__wordmark">Eclyzer Bridge</div>
+            <div className="sidebar__wordmark">Eclink</div>
             <div className="sidebar__tagline">{t("app.tagline")}</div>
           </div>
         </div>

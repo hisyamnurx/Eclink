@@ -1,6 +1,6 @@
 //! Update checking against GitHub Releases (PRD §40).
 //!
-//! Bridge does **not** phone home to Eclyzer. The only outbound update traffic
+//! Eclink does **not** phone home. The only outbound update traffic
 //! is a request for this project's own public release manifest on GitHub, made
 //! at most once every 24 hours on startup, plus whenever the user asks.
 //!
@@ -109,7 +109,7 @@ pub async fn check_for_update(
         // A failed check is expected when offline; keep the message short and
         // never surface a raw reqwest chain to the user.
         BridgeError::network("Could not check for updates.")
-            .with_hint("This is usually a network problem. Eclyzer Bridge will try again later.")
+            .with_hint("This is usually a network problem. Eclink will try again later.")
             .with_details(err.to_string())
     })?;
 

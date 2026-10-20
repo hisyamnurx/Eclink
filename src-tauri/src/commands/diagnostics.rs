@@ -90,7 +90,7 @@ fn open_in_file_manager(app: &tauri::AppHandle, path: &std::path::Path) -> Bridg
     if !path.exists() {
         return Err(
             BridgeError::io(format!("The folder {} does not exist yet.", path.display()))
-                .with_hint("It is created the first time Eclyzer Bridge saves something."),
+                .with_hint("It is created the first time Eclink saves something."),
         );
     }
     if !path.is_dir() {

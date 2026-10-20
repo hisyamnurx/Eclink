@@ -27,7 +27,7 @@ pub use crate::profiles::{AgentId, CompatibilityStatus, Profile};
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
 
-/// Directory name under `%LOCALAPPDATA%` for all Eclyzer Bridge data.
+/// Directory name under `%LOCALAPPDATA%` for all Eclink data.
 pub const APP_DATA_DIR_NAME: &str = "EclyzerBridge";
 
 /// Result of probing for an installed agent (PRD §14).
@@ -172,7 +172,7 @@ impl ActiveConfiguration {
 /// history feed (PRD §27).
 ///
 /// `RestoreDefault` and `ResetToStockDefaults` are deliberately separate. The
-/// first removes only what Eclyzer Bridge can prove it owns, so it can never
+/// first removes only what Eclink can prove it owns, so it can never
 /// destroy the user's own configuration. The second deliberately removes every
 /// provider/model override regardless of who wrote it, because that is the only
 /// way to return an agent to stock behaviour — and it therefore requires
@@ -270,7 +270,7 @@ pub struct ApplyOptions<'a> {
     /// Resolved API key for the profile, injected only where the agent has no
     /// credential-helper mechanism (PRD §15, §32.3).
     pub secret: Option<&'a str>,
-    /// Path to `eclyzer-bridge-helper.exe`, when bundled.
+    /// Path to `eclink-helper.exe`, when bundled.
     pub helper_path: Option<PathBuf>,
     /// Hash the caller last observed for the config file. A mismatch aborts the
     /// write so external edits are never clobbered (PRD §31.3, §48).

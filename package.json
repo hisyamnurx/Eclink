@@ -1,8 +1,8 @@
 {
-  "name": "eclyzer-bridge",
+  "name": "eclink",
   "private": true,
-  "version": "0.1.0",
-  "description": "Lightweight provider and profile manager for AI coding agents (OpenAI Codex, Claude Code).",
+  "version": "0.2.0",
+  "description": "Eclink - AI Provider Manager for Coding Agents. Configure, test, and switch AI providers for Codex and Claude Code without hand-editing configuration files.",
   "license": "MIT",
   "type": "module",
   "scripts": {
@@ -17,7 +17,7 @@
     "test:watch": "vitest",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "helper:build": "cargo build --release -p eclyzer-bridge-helper",
+    "helper:build": "cargo build --release -p eclink-helper",
     "tauri:build": "npm run helper:build && tauri build"
   },
   "dependencies": {

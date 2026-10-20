@@ -1,5 +1,5 @@
 [package]
-name = "eclyzer-bridge"
+name = "eclink"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,10 +7,12 @@ license.workspace = true
 repository.workspace = true
 description.workspace = true
 authors.workspace = true
-default-run = "eclyzer-bridge"
+default-run = "eclink"
 
 [lib]
-name = "eclyzer_bridge_lib"
+# The crate name is the public Rust identity of the library. It was
+# `eclyzer_bridge_lib` before the rename; `eclink_lib` is the Eclink name.
+name = "eclink_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

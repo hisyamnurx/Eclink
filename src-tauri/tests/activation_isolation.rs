@@ -20,11 +20,11 @@
 
 use std::path::{Path, PathBuf};
 
-use eclyzer_bridge_lib::adapters::claude::ClaudeAdapter;
-use eclyzer_bridge_lib::adapters::codex::CodexAdapter;
-use eclyzer_bridge_lib::adapters::{AgentAdapter, ApplyOptions};
-use eclyzer_bridge_lib::backup::BackupManager;
-use eclyzer_bridge_lib::profiles::{AdvancedOptions, AgentId, AuthMode, Profile};
+use eclink_lib::adapters::claude::ClaudeAdapter;
+use eclink_lib::adapters::codex::CodexAdapter;
+use eclink_lib::adapters::{AgentAdapter, ApplyOptions};
+use eclink_lib::backup::BackupManager;
+use eclink_lib::profiles::{AdvancedOptions, AgentId, AuthMode, Profile};
 
 /// A Claude settings file containing settings Bridge does not own.
 const CLAUDE_BEFORE: &str = r#"{

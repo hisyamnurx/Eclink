@@ -41,7 +41,7 @@ impl CodexToml {
             };
             BridgeError::config_invalid(format!("Codex configuration is not valid TOML{location}."))
                 .with_hint(
-                    "Eclyzer Bridge won't modify this file until it can be read safely. Fix the syntax or restore a backup.",
+                    "Eclink won't modify this file until it can be read safely. Fix the syntax or restore a backup.",
                 )
                 .with_details(err.to_string())
         })?;
@@ -631,7 +631,7 @@ model = \"old\"
         let mut doc = CodexToml::parse("").unwrap();
         let spec = ProviderSpec {
             auth_command: Some(AuthCommand {
-                command: r"C:\Program Files\Eclyzer Bridge\eclyzer-bridge-helper.exe",
+                command: r"C:\Program Files\Eclink\eclink-helper.exe",
                 args: vec!["secret", "resolve", "profile-1"],
                 timeout_ms: Some(5000),
             }),
@@ -660,12 +660,17 @@ model = \"old\"
             reparsed
                 .provider_auth_str("eclyzer_bridge_x_1", "command")
                 .as_deref(),
-            Some(r"C:\Program Files\Eclyzer Bridge\eclyzer-bridge-helper.exe")
+            Some(r"C:\Program Files\Eclink\eclink-helper.exe")
         );
         // It must never be split into multiple argv entries by the file itself.
-        assert!(
-            !out.contains("command = \"C:\\Program Files\\Eclyzer"),
-            "{out}"
+        // A path with a space is the case that breaks naive writers: if the
+        // writer split on whitespace, the tail of the path would show up as a
+        // separate argument and Codex would try to execute a truncated path.
+        let reparsed_args = reparsed.provider_auth_args("eclyzer_bridge_x_1");
+        assert_eq!(
+            reparsed_args,
+            vec!["secret", "resolve", "profile-1"],
+            "the space-containing path must not leak into argv: {out}"
         );
     }
 

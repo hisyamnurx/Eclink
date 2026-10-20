@@ -65,7 +65,7 @@ impl ProfileStore {
         // fields we understand instead of crashing (PRD §46).
         let value: serde_json::Value = serde_json::from_str(&raw).map_err(|err| {
             BridgeError::config_invalid("Your saved provider profiles could not be read.")
-                .with_hint("The file may be damaged. Restarting Eclyzer Bridge will recreate it.")
+                .with_hint("The file may be damaged. Restarting Eclink will recreate it.")
                 .with_details(err.to_string())
         })?;
 
@@ -83,7 +83,7 @@ impl ProfileStore {
                 match salvage_profiles(&value) {
                     Some((file, dropped)) => {
                         tracing::warn!(
-                            target: "eclyzer_bridge",
+                            target: "eclink",
                             dropped,
                             "profiles.json did not parse as a whole; kept the readable profiles"
                         );
@@ -102,7 +102,7 @@ impl ProfileStore {
         if version > PROFILES_SCHEMA_VERSION {
             // Downgrade: keep what we can read rather than refusing to start.
             tracing::warn!(
-                target: "eclyzer_bridge",
+                target: "eclink",
                 "profiles.json schema v{version} is newer than supported v{PROFILES_SCHEMA_VERSION}; reading best-effort"
             );
         } else if version < PROFILES_SCHEMA_VERSION {
@@ -164,7 +164,7 @@ fn salvage_profiles(value: &serde_json::Value) -> Option<(ProfilesFile, usize)> 
             Err(err) => {
                 dropped += 1;
                 tracing::warn!(
-                    target: "eclyzer_bridge",
+                    target: "eclink",
                     error = %err,
                     "skipping one unreadable provider profile"
                 );
@@ -198,7 +198,7 @@ fn migrate(file: ProfilesFile, from_version: u32) -> BridgeResult<ProfilesFile> 
         match version {
             0 => {
                 // v0 == "pre-versioning": same shape, no version field.
-                tracing::info!(target: "eclyzer_bridge", "migrating profiles.json from v0 to v1");
+                tracing::info!(target: "eclink", "migrating profiles.json from v0 to v1");
                 version = 1;
             }
             other => {

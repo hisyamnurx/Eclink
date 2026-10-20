@@ -454,7 +454,7 @@ pub fn slugify(input: &str) -> String {
     }
 }
 
-/// Deterministic provider id owned by Eclyzer Bridge for a profile.
+/// Deterministic provider id owned by Eclink for a profile.
 ///
 /// Always namespaced so restore-default can identify managed entries without
 /// guessing (PRD §16.3). Reserved built-in IDs are never produced because of
