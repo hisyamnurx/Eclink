@@ -44,6 +44,9 @@ pub struct ProfileInput {
     pub targets: Vec<String>,
     #[serde(default)]
     pub advanced: Option<AdvancedOptions>,
+    /// OMP-only protocol and model-role assignments.
+    #[serde(default)]
+    pub omp: Option<crate::profiles::OmpOptions>,
     #[serde(default)]
     pub notes: Option<String>,
 }
@@ -129,6 +132,9 @@ impl ProfileInput {
         if let Some(advanced) = self.advanced {
             profile.advanced = advanced;
         }
+        if let Some(omp) = self.omp {
+            profile.omp = omp;
+        }
         profile.notes = self.notes.filter(|text| !text.trim().is_empty());
 
         profile.validate().map_err(BridgeError::validation)?;
@@ -167,7 +173,7 @@ pub async fn list_profiles(
 /// (`test_profile_connection` records with `None`); using a detected version
 /// here would make every freshly written record look stale immediately.
 fn drop_stale_verdicts(profile: &mut Profile) {
-    let stale: Vec<AgentId> = [AgentId::Codex, AgentId::Claude]
+    let stale: Vec<AgentId> = AgentId::all()
         .into_iter()
         .filter(|agent| {
             profile.compatibility.contains_key(agent)
@@ -617,8 +623,36 @@ mod tests {
             clear_api_key: false,
             targets: vec!["codex".to_string(), "claude".to_string()],
             advanced: None,
+            omp: None,
             notes: None,
         }
+    }
+
+    #[test]
+    fn omp_options_survive_a_save() {
+        let mut raw = input();
+        raw.targets = vec!["omp".to_string()];
+        raw.omp = Some(crate::profiles::OmpOptions {
+            protocol: crate::profiles::OmpApiProtocol::AnthropicMessages,
+            default_model: Some("eclink-omp/deepseek-chat".into()),
+            smol: Some("eclink-omp/deepseek-chat".into()),
+            slow: None,
+            plan: None,
+            model_name: Some("DeepSeek via Eclink".into()),
+            context_window: Some(128_000),
+            max_tokens: Some(8_192),
+        });
+        let profile = raw.into_profile(None).unwrap();
+        assert_eq!(profile.targets, vec![AgentId::Omp]);
+        assert_eq!(
+            profile.omp.protocol,
+            crate::profiles::OmpApiProtocol::AnthropicMessages
+        );
+        assert_eq!(
+            profile.omp.smol.as_deref(),
+            Some("eclink-omp/deepseek-chat")
+        );
+        assert_eq!(profile.omp.context_window, Some(128_000));
     }
 
     #[test]

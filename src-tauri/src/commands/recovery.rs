@@ -67,7 +67,7 @@ pub async fn preview_stock_reset(
             crate::profiles::AgentId::Claude => {
                 Some(crate::adapters::claude::stock_reset_preview())
             }
-            crate::profiles::AgentId::Codex => None,
+            crate::profiles::AgentId::Codex | crate::profiles::AgentId::Omp => None,
         })
     })
     .await
@@ -324,7 +324,7 @@ pub async fn recovery_status(
 
         Ok(RecoveryStatus {
             agent: agent.as_str().to_string(),
-            has_original: backups.has_original(agent.as_str()),
+            has_original: adapter.has_original_backup(),
             snapshot_count: backups.snapshot_count(agent.as_str()),
             has_managed_configuration,
             can_undo,

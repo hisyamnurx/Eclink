@@ -11,6 +11,7 @@
 mod agents;
 mod diagnostics;
 mod launch;
+mod omp;
 mod playground;
 mod profiles;
 mod recovery;
@@ -20,6 +21,7 @@ mod update;
 pub use agents::*;
 pub use diagnostics::*;
 pub use launch::*;
+pub use omp::*;
 pub use playground::*;
 pub use profiles::*;
 pub use recovery::*;
@@ -65,7 +67,7 @@ pub type CommandResult<T> = Result<T, CommandError>;
 pub(crate) fn parse_agent(value: &str) -> BridgeResult<AgentId> {
     AgentId::parse(value).ok_or_else(|| {
         BridgeError::validation(format!("\"{value}\" is not a supported coding agent."))
-            .with_hint("Supported agents are Codex and Claude Code.")
+            .with_hint("Supported agents are Codex, Claude Code, and Oh My Pi.")
     })
 }
 

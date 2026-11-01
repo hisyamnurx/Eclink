@@ -32,6 +32,7 @@ function freshSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     costNoticeSeen: false,
     insecureEndpointNoticeSeen: false,
     language: "en",
+    ompProfile: "default",
     appVersion: "0.1.0",
     dataDirectory: "C:\\data",
     logDirectory: "C:\\data\\logs",

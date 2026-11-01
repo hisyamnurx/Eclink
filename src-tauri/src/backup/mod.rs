@@ -8,8 +8,11 @@
 //! * **History** — an append-only local ledger of what happened, with a pointer
 //!   to the snapshot that can undo it.
 //!
-//! Backups store the agent config file, with any credential *values* blanked
-//! out first.
+//! Codex and Claude Code backups store the agent config file with credential
+//! *values* blanked out. Oh My Pi backups must preserve the exact file to make
+//! Restore Original meaningful, so its provider registry is sealed with Windows
+//! DPAPI instead. A sealed payload is still restorable by the same Windows user
+//! and never appears in plaintext on disk.
 //!
 //! It is not true that keys never live in these config files: Codex uses the
 //! credential helper, but Claude Code has no such mechanism, so its gateway key
@@ -31,7 +34,170 @@ use crate::config::fs::{read_to_string_opt, sha256_hex, write_atomic};
 use crate::error::{BridgeError, BridgeResult};
 
 pub use history::{HistoryEntry, HistoryStore, HISTORY_LIMIT};
-pub use snapshots::{Snapshot, SnapshotStore, SNAPSHOT_RETENTION};
+pub use snapshots::{
+    Snapshot, SnapshotBundle, SnapshotBundleFile, SnapshotStore, SNAPSHOT_RETENTION,
+};
+
+use crate::secrets::{Cipher, DpapiCipher};
+use base64::Engine as _;
+
+/// Prefix marking a DPAPI-sealed backup payload.
+pub const SEALED_PREFIX: &str = "eclink-dpapi-v1:";
+
+/// Seal a backup payload with the current Windows user's DPAPI key.
+pub fn seal_backup_text(plain: &str) -> BridgeResult<String> {
+    let sealed = DpapiCipher::new().seal(plain.as_bytes())?;
+    Ok(format!(
+        "{SEALED_PREFIX}{}",
+        base64::engine::general_purpose::STANDARD.encode(sealed)
+    ))
+}
+
+/// Open a payload produced by [`seal_backup_text`]. Plain legacy payloads are
+/// returned unchanged, so old snapshots keep working.
+pub fn open_backup_text(text: &str) -> BridgeResult<String> {
+    let Some(encoded) = text.strip_prefix(SEALED_PREFIX) else {
+        return Ok(text.to_string());
+    };
+    let sealed = base64::engine::general_purpose::STANDARD
+        .decode(encoded.trim())
+        .map_err(|err| {
+            BridgeError::internal("The encrypted backup is damaged.").with_details(err.to_string())
+        })?;
+    let plain = DpapiCipher::new().open(&sealed)?;
+    String::from_utf8(plain).map_err(|err| {
+        BridgeError::internal("The encrypted backup is not valid UTF-8.")
+            .with_details(err.to_string())
+    })
+}
+
+/// One file in an OMP original backup.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OriginalBundleFile {
+    pub source_path: String,
+    pub stored_name: String,
+    pub sha256: String,
+    pub bytes: u64,
+    pub existed: bool,
+    /// Whether `stored_name` contains a DPAPI-sealed payload.
+    #[serde(default)]
+    pub sealed: bool,
+}
+
+/// Metadata plus every restored file for a multi-file original.
+pub type OriginalBundle = (OriginalMeta, Vec<(OriginalBundleFile, Option<String>)>);
+
+impl BackupManager {
+    /// Create an immutable multi-file original backup if none exists.
+    ///
+    /// OMP keeps a provider registry (`models.yml`) and model roles
+    /// (`config.yml`) in separate files. The existing single-file API cannot
+    /// represent "restore exactly what existed before Eclink first wrote".
+    /// This stores each file's content (credential values redacted using the
+    /// same policy as every other backup) and its existence bit.
+    pub fn ensure_original_bundle(
+        &self,
+        agent: &str,
+        files: &[(PathBuf, Option<String>)],
+        managed_keys: &[String],
+    ) -> BridgeResult<bool> {
+        if self.has_original(agent) {
+            return Ok(false);
+        }
+        let dir = self.original_path(agent);
+        std::fs::create_dir_all(dir.join("files"))?;
+
+        let mut metas = Vec::new();
+        let mut first_hash = String::new();
+        let mut first_bytes = 0u64;
+        let mut first_existed = true;
+        for (index, (path, raw)) in files.iter().enumerate() {
+            let (stored, hash, bytes, existed, sealed) = match raw {
+                Some(text) => (
+                    seal_backup_text(text)?,
+                    crate::config::fs::sha256_hex(text.as_bytes()),
+                    text.len() as u64,
+                    true,
+                    true,
+                ),
+                None => (
+                    String::new(),
+                    crate::config::fs::sha256_hex(b""),
+                    0,
+                    false,
+                    false,
+                ),
+            };
+            let file_name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("config");
+            let stored_name = format!("{index}-{file_name}");
+            write_atomic(&dir.join("files").join(&stored_name), stored.as_bytes())?;
+            if index == 0 {
+                first_hash = hash.clone();
+                first_bytes = bytes;
+                first_existed = existed;
+            }
+            metas.push(OriginalBundleFile {
+                source_path: path.display().to_string(),
+                stored_name,
+                sha256: hash,
+                bytes,
+                existed,
+                sealed,
+            });
+        }
+
+        let meta = OriginalMeta {
+            agent: agent.to_string(),
+            created_at: chrono::Local::now().to_rfc3339(),
+            sha256: first_hash,
+            bytes: first_bytes,
+            existed: first_existed,
+            source_path: metas
+                .first()
+                .map(|file| file.source_path.clone())
+                .unwrap_or_default(),
+            managed_keys: managed_keys.to_vec(),
+            files: metas,
+        };
+        let meta_json = serde_json::to_string_pretty(&meta).map_err(|err| {
+            BridgeError::internal("Could not record the original backup.")
+                .with_details(err.to_string())
+        })?;
+        write_atomic(&dir.join("meta.json"), meta_json.as_bytes())?;
+        tracing::info!(target: "eclink", agent, "multi-file original backup created");
+        Ok(true)
+    }
+
+    /// Read an original bundle when the recorded metadata includes multiple
+    /// files. Returns `None` for the legacy single-file format.
+    pub fn read_original_bundle(&self, agent: &str) -> BridgeResult<Option<OriginalBundle>> {
+        let dir = self.original_path(agent);
+        let Some(meta_raw) = read_to_string_opt(&dir.join("meta.json"))? else {
+            return Ok(None);
+        };
+        let meta: OriginalMeta = serde_json::from_str(&meta_raw).map_err(|err| {
+            BridgeError::internal("The original backup metadata is unreadable.")
+                .with_details(err.to_string())
+        })?;
+        if meta.files.is_empty() {
+            return Ok(None);
+        }
+        let mut files = Vec::new();
+        for file in &meta.files {
+            let content = read_to_string_opt(&dir.join("files").join(&file.stored_name))?;
+            let content = match content {
+                Some(text) if file.sealed => Some(open_backup_text(&text)?),
+                other => other,
+            };
+            files.push((file.clone(), content));
+        }
+        Ok(Some((meta, files)))
+    }
+}
 
 /// Metadata recorded alongside each snapshot (PRD §26.3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +219,11 @@ pub struct SnapshotMeta {
     /// ownership metadata (PRD §49).
     #[serde(default)]
     pub managed_keys: Vec<String>,
+    /// Whether the `.content` payload is DPAPI-sealed. OMP sets this so a
+    /// literal `apiKey` in models.yml is preserved without being copied in
+    /// plaintext into the snapshot tree.
+    #[serde(default)]
+    pub sealed: bool,
 }
 
 /// Manages originals and snapshots for every agent.
@@ -144,6 +315,7 @@ impl BackupManager {
             existed,
             source_path: config_path.display().to_string(),
             managed_keys: managed_keys.to_vec(),
+            files: Vec::new(),
         };
 
         // Write content first, then meta, so a crash cannot leave a meta file
@@ -233,6 +405,10 @@ pub struct OriginalMeta {
     pub source_path: String,
     #[serde(default)]
     pub managed_keys: Vec<String>,
+    /// Present for the multi-file (OMP) backup format. Empty for the legacy
+    /// single-file format, which keeps `read_original` compatible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<OriginalBundleFile>,
 }
 
 #[cfg(test)]

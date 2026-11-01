@@ -1183,6 +1183,157 @@ pub async fn probe_streaming(target: &ProbeTarget, codex: bool) -> ProbeResult {
     result
 }
 
+/// OMP's Chat Completions streaming shape. Kept separate from the
+/// Responses/Anthropic probes because the route and event names differ.
+pub async fn probe_chat_streaming(target: &ProbeTarget) -> ProbeResult {
+    let body = json!({
+        "model": target.model,
+        "max_tokens": 16,
+        "stream": true,
+        "messages": [{ "role": "user", "content": "ping" }]
+    });
+    let request = match target.post("/v1/chat/completions", body) {
+        Ok(request) => request,
+        Err(err) => {
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
+        }
+    };
+    let started = Instant::now();
+    let mut response = match request.send().await {
+        Ok(response) => response,
+        Err(err) => {
+            let elapsed = started.elapsed().as_millis() as u64;
+            let outcome = if err.is_timeout() {
+                ProbeOutcome::TimedOut
+            } else {
+                ProbeOutcome::Unreachable
+            };
+            return ProbeResult::new(outcome, elapsed).with_detail(transport_detail(&err));
+        }
+    };
+    if !response.status().is_success() {
+        let status = response.status();
+        let text = response.text().await.unwrap_or_default();
+        let latency = started.elapsed().as_millis() as u64;
+        return ProbeResult::new(classify_status(status, &text), latency).with_detail(format!(
+            "{} {}",
+            status.as_u16(),
+            error_detail(&text)
+        ));
+    }
+
+    let mut saw_data = false;
+    let mut saw_content = false;
+    let mut buffer = String::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                let text = String::from_utf8_lossy(&chunk);
+                buffer.push_str(&text);
+                for line in text.lines() {
+                    let trimmed = line.trim_start();
+                    if let Some(payload) = trimmed.strip_prefix("data:") {
+                        let payload = payload.trim();
+                        if payload == "[DONE]" {
+                            continue;
+                        }
+                        saw_data = true;
+                        if payload.contains("delta") || payload.contains("choices") {
+                            saw_content = true;
+                        }
+                    }
+                }
+                if saw_content || buffer.len() > MAX_BODY_BYTES {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(err) => {
+                let latency = started.elapsed().as_millis() as u64;
+                if saw_data {
+                    return ProbeResult::new(ProbeOutcome::Supported, latency)
+                        .with_detail("The stream ended early but produced usable data.");
+                }
+                let outcome = if err.is_timeout() {
+                    ProbeOutcome::TimedOut
+                } else {
+                    ProbeOutcome::Unreachable
+                };
+                return ProbeResult::new(outcome, latency).with_detail(transport_detail(&err));
+            }
+        }
+    }
+    let latency = started.elapsed().as_millis() as u64;
+    let mut result = ProbeResult::new(
+        if saw_content {
+            ProbeOutcome::Supported
+        } else {
+            ProbeOutcome::Unsupported
+        },
+        latency,
+    );
+    result.streamed = saw_content;
+    if !saw_content {
+        result = result.with_detail(if saw_data {
+            "The stream sent data but not in a recognized Chat Completions event format."
+        } else {
+            "The endpoint answered without streaming any events."
+        });
+    }
+    result
+}
+
+/// OMP's Chat Completions tool-calling shape.
+pub async fn probe_chat_tool_calling(target: &ProbeTarget) -> ProbeResult {
+    let body = json!({
+        "model": target.model,
+        "max_tokens": 64,
+        "messages": [{ "role": "user", "content": "What is the weather in Jakarta? Use the tool." }],
+        "tools": [{
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the current weather for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": { "city": { "type": "string" } },
+                    "required": ["city"]
+                }
+            }
+        }],
+        "tool_choice": "auto"
+    });
+    let request = match target.post("/v1/chat/completions", body) {
+        Ok(request) => request,
+        Err(err) => {
+            return ProbeResult::new(ProbeOutcome::Unreachable, 0).with_detail(err.message.clone())
+        }
+    };
+    match execute(request).await {
+        Ok((status, text, latency)) => {
+            if !status.is_success() {
+                return ProbeResult::new(classify_status(status, &text), latency)
+                    .with_detail(format!("{} {}", status.as_u16(), error_detail(&text)));
+            }
+            let called = text.contains("tool_calls") || text.contains("function_call");
+            let mut result = ProbeResult::new(
+                if called {
+                    ProbeOutcome::Supported
+                } else {
+                    ProbeOutcome::Unsupported
+                },
+                latency,
+            );
+            result.tool_called = called;
+            if !called {
+                result = result.with_detail("The model answered without requesting the tool.");
+            }
+            result
+        }
+        Err(result) => result,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Tool calling
 // ---------------------------------------------------------------------------

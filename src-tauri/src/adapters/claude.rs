@@ -1218,6 +1218,10 @@ impl AgentAdapter for ClaudeAdapter {
         Ok(Vec::new())
     }
 
+    fn has_original_backup(&self) -> bool {
+        self.backups.has_original(AgentId::Claude.as_str())
+    }
+
     fn diagnostics(&self) -> BridgeResult<AgentDiagnostics> {
         let detection = self.detect()?;
         let snapshot = self.read_config()?;

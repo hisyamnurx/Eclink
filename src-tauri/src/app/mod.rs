@@ -43,6 +43,12 @@ pub fn builder() -> BridgeResult<tauri::Builder<tauri::Wry>> {
             crate::commands::list_provider_templates,
             crate::commands::test_profile_connection,
             crate::commands::clear_compatibility,
+            // ---- Oh My Pi ------------------------------------------------
+            crate::commands::list_omp_profiles,
+            crate::commands::get_omp_profile,
+            crate::commands::set_omp_profile,
+            crate::commands::preview_omp_profile,
+            crate::commands::preview_saved_omp_profile,
             crate::commands::get_cost_notice,
             // ---- playground ---------------------------------------------
             crate::commands::playground_send,

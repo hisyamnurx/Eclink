@@ -45,7 +45,7 @@ export type ErrorKind =
   | "update"
   | "internal";
 
-export type AgentId = "codex" | "claude";
+export type AgentId = "codex" | "claude" | "omp";
 export type ConfigParseState = "missing" | "valid" | "invalid";
 export type ActiveKind = "default" | "managed" | "external";
 export type AuthMode = "bearer" | "x_api_key";
@@ -101,6 +101,25 @@ export interface CompatibilityRecord {
   staleKey?: string;
 }
 
+export type OmpApiProtocol = "open_ai_completions" | "open_ai_responses" | "anthropic_messages";
+
+/**
+ * OMP-only profile settings.
+ *
+ * Protocol names use the backend's snake_case wire values. Role selectors are
+ * OMP `provider/model` strings; an empty field leaves that role alone.
+ */
+export interface OmpOptions {
+  protocol: OmpApiProtocol;
+  defaultModel?: string;
+  smol?: string;
+  slow?: string;
+  plan?: string;
+  modelName?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+}
+
 export interface Profile {
   id: string;
   name: string;
@@ -110,6 +129,7 @@ export interface Profile {
   secretRef?: string;
   targets: AgentId[];
   advanced?: AdvancedOptions;
+  omp?: OmpOptions;
   compatibility?: Partial<Record<AgentId, CompatibilityRecord>>;
   notes?: string;
   createdAt: string;
@@ -132,6 +152,7 @@ export interface ProfileInput {
   clearApiKey?: boolean;
   targets: AgentId[];
   advanced?: AdvancedOptions;
+  omp?: OmpOptions;
   notes?: string;
 }
 
@@ -279,6 +300,8 @@ export interface AppSettings {
   insecureEndpointNoticeSeen: boolean;
   /** Interface language tag. Defaults to `en` on an older settings file. */
   language: string;
+  /** OMP named profile Eclink manages. `default` is the default profile. */
+  ompProfile: string;
 }
 
 export interface SettingsView extends AppSettings {
@@ -303,6 +326,36 @@ export interface SettingsPatch {
   lastProjectDirectory?: string;
   /** Interface language tag, validated against the supported set. */
   language?: string;
+}
+
+export interface OmpProfileSummary {
+  name: string;
+  label: string;
+  configDir: string;
+  exists: boolean;
+}
+
+export interface OmpRolePreview {
+  role: string;
+  selector: string;
+  previous?: string;
+}
+
+export interface OmpPreview {
+  profile: string;
+  configDir: string;
+  modelsPath: string;
+  configPath: string;
+  providerId: string;
+  selector: string;
+  api: string;
+  baseUrl: string;
+  model: string;
+  roles: OmpRolePreview[];
+  providerExists: boolean;
+  owned: boolean;
+  conflict?: string;
+  notes: string[];
 }
 
 export interface DiagnosticsBundle {
@@ -382,6 +435,11 @@ export interface Commands {
     result: TestOutcome;
   };
   clear_compatibility: { args: { id: string; agent: AgentId }; result: ProfileSummary };
+  list_omp_profiles: { args: Record<string, never>; result: OmpProfileSummary[] };
+  get_omp_profile: { args: Record<string, never>; result: string };
+  set_omp_profile: { args: { profile: string }; result: string };
+  preview_omp_profile: { args: { profile: Profile }; result: OmpPreview };
+  preview_saved_omp_profile: { args: { id: string }; result: OmpPreview };
   get_cost_notice: { args: Record<string, never>; result: CostNotice };
   playground_send: {
     args: { id: string; prompt: string; agent?: AgentId };
@@ -525,6 +583,7 @@ export function toApiError(raw: unknown): ApiError {
         message: candidate.message,
         hint: candidate.hint,
         details: candidate.details,
+        code: candidate.code,
       });
     }
     // A thrown Error from the bridge itself. `String(error)` is used rather than

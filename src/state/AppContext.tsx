@@ -164,7 +164,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const refreshAgent = useCallback(async (agent: string) => {
     try {
       const updated = await call("refresh_agent", {
-        agent: agent as "codex" | "claude",
+        agent: agent as "codex" | "claude" | "omp",
       });
       setAgents((current) =>
         current.map((item) => (item.agent === updated.agent ? updated : item)),

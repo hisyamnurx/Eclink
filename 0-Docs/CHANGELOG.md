@@ -8,6 +8,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Eclink is an independent open-source project and is not affiliated
 > with, endorsed by, or sponsored by OpenAI or Anthropic.**
 
+## [0.3.0] - 2026-11-02
+
+Eclink now manages **Oh My Pi (OMP)** alongside Codex and Claude Code. This is
+an additive release: existing profiles, keys, snapshots, history, and updater
+identity are unchanged.
+
+### Added
+
+- **Oh My Pi detection and version gate.** Eclink finds `omp` from PATH, the Bun
+  global bin directory, and `%LOCALAPPDATA%\omp`, and requires OMP 18.0.0 or
+  newer for the custom-provider schema this release writes.
+- **OMP provider injection into `models.yml`.** A profile becomes a named
+  custom provider with `baseUrl`, `api`, `authHeader`, a model list, and an
+  `apiKey` that runs Eclink's credential helper. Comments, key order, and other
+  providers are preserved by a lossless YAML editor.
+- **OMP model roles in `config.yml`.** `default`, `smol`, `slow`, and `plan` can
+  be assigned from the profile editor. Roles left empty are never written, and a
+  role the user edits after activation is not reverted by Restore Default.
+- **OMP profiles.** Eclink lists the default profile and named
+  `%USERPROFILE%\.omp\profiles\<name>` profiles, lets the user choose which one
+  it manages, and isolates originals and ownership records per OMP profile.
+- **Preview before activation.** The OMP flow shows the exact provider ID,
+  selector, role changes, config directory, and any ownership conflict before
+  either file is written.
+- **OMP restore and undo.** Restore Default removes only Eclink's provider and
+  the role values it wrote. Restore Original returns both files to the state
+  before Eclink first touched that OMP profile. Snapshots are reversible and
+  retained under the existing history UI.
+- **OMP connection testing and Playground.** Both follow the profile's selected
+  OMP protocol: OpenAI Chat Completions, OpenAI Responses, or Anthropic
+  Messages. Streaming and tool calling are probed with the matching wire format.
+- **OMP launch.** Launch passes `--profile` and the managed `--model` as separate
+  argv entries, never as a shell string.
+- **Sealed OMP backups.** OMP permits a literal `apiKey` in `models.yml`. Instead
+  of refusing to work or copying that key into a plaintext snapshot, Eclink
+  seals OMP snapshots and originals with Windows DPAPI. Restore still works for
+  the same Windows user, and the credential never appears in plaintext backups.
+- **English and Indonesian strings** for every OMP control.
+
+### Changed
+
+- The agent list, provider editor, overview, history, and Playground render
+  three agents. The old two-way Codex/Claude label ternaries were replaced with
+  one shared label mapping.
+- A full stock reset is intentionally not offered for OMP: OMP has no single
+  built-in gateway to return to. The UI explains Restore Default and Restore
+  Original instead of presenting a button that would fail.
+
+### Security
+
+- API keys still live only in the DPAPI-sealed `secrets.dat`. OMP receives a
+  command, not a key. OMP snapshots and originals are DPAPI-sealed and excluded
+  from logs and diagnostics.
+- Eclink refuses to overwrite a provider ID it cannot prove it owns.
+
 ## [0.2.1] - 2026-10-20
 
 A patch release containing the Claude Code base-URL fix and the CI fixes. No

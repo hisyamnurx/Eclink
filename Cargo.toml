@@ -3,7 +3,7 @@ members = ["src-tauri", "helper"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2021"
 # 1.85 rather than the 1.77 floor Tauri 2 alone would allow: the codebase uses
 # `Option::is_none_or` (1.82), `is_unicast_link_local` (1.84), and the 2024
@@ -19,7 +19,7 @@ description = "Eclink - AI Provider Manager for Coding Agents."
 serde = { version = "1", features = ["derive"] }
 # `preserve_order` is REQUIRED, not incidental. Without it `serde_json::Map` is a
 # BTreeMap, so every write to Claude Code's settings.json would reorder the
-# user's keys alphabetically — a diff they never asked for, produced by a tool
+# user's keys alphabetically â€” a diff they never asked for, produced by a tool
 # whose whole promise is that it edits their config losslessly. The feature
 # switches Map to an insertion-ordered IndexMap. Test:
 # config::json_patch::tests::key_order_is_preserved_across_a_mutation
@@ -31,6 +31,11 @@ chrono = { version = "0.4", features = ["serde"] }
 sha2 = "0.10"
 base64 = "0.22"
 toml_edit = "0.22"
+# OMP uses user-editable YAML. `yaml-edit` is a lossless CST editor so comments,
+# key order, anchors, and unrelated settings survive a targeted provider or
+# model-role change. `serde_yaml` validates the resulting document as a whole.
+yaml-edit = "0.3"
+serde_yaml = "0.9"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "time", "fmt", "chrono"] }
 tracing-appender = "0.2"

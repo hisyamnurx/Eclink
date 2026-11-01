@@ -5,15 +5,19 @@
 **AI Provider Manager for Coding Agents.**
 
 Eclink is a lightweight Windows application that lets you configure, test, and
-switch AI providers for **OpenAI Codex** and **Claude Code** without manually
-editing configuration files. It edits only the keys it owns, backs up everything
-before it touches it, and can restore your previous configuration exactly.
+switch AI providers for **OpenAI Codex**, **Claude Code**, and **Oh My Pi (OMP)**
+without manually editing configuration files. It edits only the keys it owns,
+backs up everything before it touches it, and can restore your previous
+configuration exactly.
 
 - Windows 10/11 x64. The installer is an NSIS `.exe`.
-- API keys are sealed with Windows DPAPI, scoped to your user account.
-- Codex and Claude Code are configured and tested independently, because they use
-  different APIs. A provider is reported compatible for each agent only when it
-  actually answers that agent's client-facing endpoint.
+- API keys are sealed with Windows DPAPI, scoped to your user account. OMP reads
+  its key through Eclink's credential helper, so no literal key is written to
+  `models.yml`.
+- Codex, Claude Code, and OMP are configured and tested independently, because
+  they use different APIs and configuration shapes. A provider is reported
+  compatible for each agent only when it actually answers that agent's
+  client-facing endpoint.
 - No telemetry, no analytics, no crash reporting, no Eclink server.
 - MIT licensed.
 
@@ -62,16 +66,21 @@ node scripts/compare-icon.mjs target/release/eclink.exe src-tauri/icons/icon.ico
 
 ## What it touches
 
-Eclink writes to exactly two configuration files, and only the keys it owns:
+Eclink writes only the configuration files for the agents you target, and only
+the keys it owns:
 
-| Agent       | File                                  |
-| ----------- | ------------------------------------- |
-| Codex       | `%USERPROFILE%\.codex\config.toml`    |
-| Claude Code | `%USERPROFILE%\.claude\settings.json` |
+| Agent       | File                                                              |
+| ----------- | ----------------------------------------------------------------- |
+| Codex       | `%USERPROFILE%\.codex\config.toml`                                |
+| Claude Code | `%USERPROFILE%\.claude\settings.json`                             |
+| Oh My Pi    | `%USERPROFILE%\.omp\agent\models.yml` and `config.yml`            |
+| Oh My Pi    | `%USERPROFILE%\.omp\profiles\<name>\agent\` for a named profile   |
 
 Comments, key order, line endings, and every unrelated setting survive. An edit
 made in another program between reading and writing aborts the change rather than
-clobbering it.
+clobbering it. OMP backups are sealed with Windows DPAPI because its provider
+file may legitimately contain a literal key; Codex and Claude Code backups keep
+their existing redaction policy.
 
 Application data lives in `%LOCALAPPDATA%\EclyzerBridge`, which is separate from
 the install directory, `%LOCALAPPDATA%\Eclink`. Uninstalling removes the
@@ -95,7 +104,7 @@ Installing Eclink over an existing Eclyzer Bridge installation is supported.
 - **Backups, snapshots and history** remain in place and remain restorable, so
   Restore Original still returns the file that existed before any of this.
 - **Your language preference** is preserved, including Indonesian.
-- **Codex and Claude Code keep working.** A Codex configuration that already
+- **Codex, Claude Code, and Oh My Pi keep working.** A Codex configuration that already
   points at the old credential helper keeps resolving credentials, because Eclink
   accepts both the old and the new helper executable name.
 
@@ -113,6 +122,7 @@ old installation is still present, the entry is deliberately left alone.
 | Cut a release                  | [RELEASING.md](0-Docs/RELEASING.md)         |
 | See what changed               | [CHANGELOG.md](0-Docs/CHANGELOG.md)         |
 | Understand retained old names  | [legacy-compatibility.md](docs/legacy-compatibility.md) |
+| Understand the Oh My Pi integration | [omp-integration-notes.md](docs/omp-integration-notes.md) |
 
 ## Licence
 

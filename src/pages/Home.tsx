@@ -25,6 +25,7 @@ import {
   Modal,
   type StatusTone,
 } from "../components/ui";
+import { agentLabel } from "../lib/agents";
 import { ApiError, call, type AgentId, type AgentSummary } from "../lib/api";
 import { relativeTime } from "../lib/format";
 import { compatibilityLabel } from "../lib/compatibility";
@@ -282,7 +283,7 @@ function LaunchDialog({ agent, onClose }: { agent: AgentId; onClose: () => void 
   const action = useAction();
   const remember = settings?.rememberProjectDirectory ?? false;
 
-  const agentName = agent === "codex" ? "Codex" : "Claude Code";
+  const agentName = agentLabel(agent);
 
   const chooseFolder = async () => {
     try {

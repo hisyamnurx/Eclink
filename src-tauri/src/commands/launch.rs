@@ -88,6 +88,7 @@ pub async fn activate_profile(
         }
         crate::adapters::AgentId::Codex => CredentialMode::EnvironmentVariable,
         crate::adapters::AgentId::Claude => CredentialMode::SettingsFile,
+        crate::adapters::AgentId::Omp => CredentialMode::CredentialHelper,
     };
 
     // The config hash the UI last saw, so an edit made in another window aborts

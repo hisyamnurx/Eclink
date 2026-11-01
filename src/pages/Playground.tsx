@@ -10,6 +10,7 @@
 import { useState } from "react";
 
 import { Badge, Banner, Button, EmptyState, Field, LoadingState, Meta } from "../components/ui";
+import { agentLabel } from "../lib/agents";
 import { call, type AgentId, type PlaygroundResult, type ProfileSummary } from "../lib/api";
 import { latency } from "../lib/format";
 import { errorText } from "../lib/backend-text";
@@ -57,7 +58,7 @@ export function Playground({ initialAgent }: { initialAgent?: AgentId }) {
       {usable.length === 0 ? (
         <EmptyState title={t("playground.noUsableProvider")}>
           {t("playground.noUsableProviderBody", {
-            agent: agent === "codex" ? "Codex" : "Claude Code",
+            agent: agentLabel(agent),
           })}
         </EmptyState>
       ) : (

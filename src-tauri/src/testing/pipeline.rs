@@ -203,6 +203,26 @@ fn validate_inputs(
     Ok(())
 }
 
+/// The wire API a given (profile, agent) pair will actually use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Wire {
+    Responses,
+    Chat,
+    Anthropic,
+}
+
+fn wire_protocol(profile: &Profile, agent: AgentId) -> Wire {
+    match agent {
+        AgentId::Codex => Wire::Responses,
+        AgentId::Claude => Wire::Anthropic,
+        AgentId::Omp => match profile.omp.protocol {
+            crate::profiles::OmpApiProtocol::OpenAiResponses => Wire::Responses,
+            crate::profiles::OmpApiProtocol::OpenAiCompletions => Wire::Chat,
+            crate::profiles::OmpApiProtocol::AnthropicMessages => Wire::Anthropic,
+        },
+    }
+}
+
 /// Run the full pipeline for one (profile, agent) pair.
 ///
 /// This performs real network requests and may incur a small cost at the
@@ -213,6 +233,7 @@ pub async fn test_profile(
     secret: Secret,
 ) -> BridgeResult<TestOutcome> {
     let mut steps: Vec<TestStep> = Vec::new();
+    let wire = wire_protocol(profile, agent);
 
     // ---- 1. Input validation -------------------------------------------
     if let Err((code, message)) = validate_inputs(profile, agent, &secret) {
@@ -245,7 +266,6 @@ pub async fn test_profile(
     });
 
     let mut target = build_target(profile, secret)?;
-    let codex = agent == AgentId::Codex;
 
     // ---- 2. Reachability ------------------------------------------------
     let reach = probes::probe_reachability(&target).await;
@@ -280,10 +300,10 @@ pub async fn test_profile(
     // than a credential problem, so it must not abort the pipeline with an
     // "Authentication Failed" verdict. The protocol step below reports it
     // properly, naming which API the provider does serve.
-    let required_protocol = if codex {
-        probes::Protocol::OpenAiResponses
-    } else {
-        probes::Protocol::AnthropicMessages
+    let required_protocol = match wire {
+        Wire::Responses => probes::Protocol::OpenAiResponses,
+        Wire::Chat => probes::Protocol::OpenAiChatCompletions,
+        Wire::Anthropic => probes::Protocol::AnthropicMessages,
     };
     let auth = probes::probe_authentication_for(&target, required_protocol).await;
     let auth_ok = auth.outcome == ProbeOutcome::Supported;
@@ -318,10 +338,10 @@ pub async fn test_profile(
         // Everything after this depends on the required protocol, so the protocol
         // step is where the real answer is, and the rest is skipped with a reason
         // rather than reported as three more failures.
-        let protocol = if codex {
-            probes::probe_codex_protocol(&target).await
-        } else {
-            probes::probe_claude_protocol(&target).await
+        let protocol = match wire {
+            Wire::Responses => probes::probe_codex_protocol(&target).await,
+            Wire::Chat => probes::probe_chat_completions(&target).await,
+            Wire::Anthropic => probes::probe_claude_protocol(&target).await,
         }
         .with_detail(protocol_mismatch_note(&target, required_protocol).await);
         steps.push(TestStep::new(
@@ -401,15 +421,15 @@ pub async fn test_profile(
     // When the required route is absent, the report says which protocol is
     // required and which ones the provider does offer instead — a bare "not
     // found" leaves the user guessing whether the problem is their key.
-    let required = if codex {
-        probes::Protocol::OpenAiResponses
-    } else {
-        probes::Protocol::AnthropicMessages
+    let required = match wire {
+        Wire::Responses => probes::Protocol::OpenAiResponses,
+        Wire::Chat => probes::Protocol::OpenAiChatCompletions,
+        Wire::Anthropic => probes::Protocol::AnthropicMessages,
     };
-    let protocol = if codex {
-        probes::probe_codex_protocol(&target).await
-    } else {
-        probes::probe_claude_protocol(&target).await
+    let protocol = match wire {
+        Wire::Responses => probes::probe_codex_protocol(&target).await,
+        Wire::Chat => probes::probe_chat_completions(&target).await,
+        Wire::Anthropic => probes::probe_claude_protocol(&target).await,
     };
     let protocol_ok = protocol.outcome == ProbeOutcome::Supported;
     let protocol = if protocol_ok {
@@ -445,7 +465,11 @@ pub async fn test_profile(
     target.timeout = STREAM_TIMEOUT;
 
     // ---- 6. Streaming ---------------------------------------------------
-    let streaming = probes::probe_streaming(&target, codex).await;
+    let streaming = match wire {
+        Wire::Responses => probes::probe_streaming(&target, true).await,
+        Wire::Anthropic => probes::probe_streaming(&target, false).await,
+        Wire::Chat => probes::probe_chat_streaming(&target).await,
+    };
     let stream_ok = streaming.outcome == ProbeOutcome::Supported && streaming.streamed;
     // Streaming is an optional capability: the required steps already passed, so
     // a failure here lowers the verdict to partially compatible rather than
@@ -462,7 +486,11 @@ pub async fn test_profile(
     ));
 
     // ---- 7. Tool calling -----------------------------------------------
-    let tools = probes::probe_tool_calling(&target, codex).await;
+    let tools = match wire {
+        Wire::Responses => probes::probe_tool_calling(&target, true).await,
+        Wire::Anthropic => probes::probe_tool_calling(&target, false).await,
+        Wire::Chat => probes::probe_chat_tool_calling(&target).await,
+    };
     let tools_ok = tools.outcome == ProbeOutcome::Supported && tools.tool_called;
     let tools_state = if tools_ok {
         TestStepState::Passed

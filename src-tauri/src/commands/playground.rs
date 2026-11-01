@@ -73,6 +73,17 @@ pub async fn playground_send(
     let protocol = match agent {
         crate::adapters::AgentId::Claude => crate::profiles::ApiProtocol::AnthropicMessages,
         crate::adapters::AgentId::Codex => crate::profiles::ApiProtocol::OpenAiResponses,
+        crate::adapters::AgentId::Omp => match profile.omp.protocol {
+            crate::profiles::OmpApiProtocol::OpenAiCompletions => {
+                crate::profiles::ApiProtocol::OpenAiChatCompletions
+            }
+            crate::profiles::OmpApiProtocol::OpenAiResponses => {
+                crate::profiles::ApiProtocol::OpenAiResponses
+            }
+            crate::profiles::OmpApiProtocol::AnthropicMessages => {
+                crate::profiles::ApiProtocol::AnthropicMessages
+            }
+        },
     };
     Ok(crate::testing::playground::send(&target, &prompt, protocol).await?)
 }

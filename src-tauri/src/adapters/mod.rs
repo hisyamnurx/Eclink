@@ -13,6 +13,7 @@
 pub mod claude;
 pub mod codex;
 pub mod detect;
+pub mod omp;
 
 use std::path::{Path, PathBuf};
 
@@ -26,6 +27,7 @@ use crate::error::BridgeResult;
 pub use crate::profiles::{AgentId, CompatibilityStatus, Profile};
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
+pub use omp::{OmpAdapter, OmpPreview, OmpProfileSummary, OmpSelection};
 
 /// Directory name under `%LOCALAPPDATA%` for all Eclink data.
 pub const APP_DATA_DIR_NAME: &str = "EclyzerBridge";
@@ -369,6 +371,11 @@ pub trait AgentAdapter: Send + Sync {
     fn launch_env(&self, secret: Option<&str>) -> BridgeResult<Vec<(String, String)>>;
 
     // ---- diagnostics -----------------------------------------------------
+
+    /// Whether an original (pre-Eclink) backup exists for the configuration
+    /// currently selected. OMP overrides this because each named OMP profile
+    /// has its own original files.
+    fn has_original_backup(&self) -> bool;
 
     fn diagnostics(&self) -> BridgeResult<AgentDiagnostics>;
 }

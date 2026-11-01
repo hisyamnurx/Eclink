@@ -16,6 +16,36 @@ pub struct Snapshot {
     pub content: String,
 }
 
+/// One file captured in a multi-file OMP snapshot.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotBundleFile {
+    pub path: String,
+    /// `None` records that the file did not exist.
+    pub content: Option<String>,
+}
+
+/// JSON envelope stored in a snapshot payload for multi-file agents.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotBundle {
+    pub version: u32,
+    pub files: Vec<SnapshotBundleFile>,
+}
+
+impl SnapshotBundle {
+    pub fn parse(raw: &str) -> Option<Self> {
+        let text = crate::backup::open_backup_text(raw).ok()?;
+        let bundle: Self = serde_json::from_str(&text).ok()?;
+        (bundle.version == 1 && !bundle.files.is_empty()).then_some(bundle)
+    }
+
+    /// Parse a snapshot, unsealing it first when necessary.
+    pub fn from_snapshot(snapshot: &Snapshot) -> Option<Self> {
+        Self::parse(&snapshot.content)
+    }
+}
+
 /// Stores snapshots under `<backups>/<agent>/snapshots/`.
 #[derive(Clone)]
 pub struct SnapshotStore {
@@ -66,6 +96,7 @@ impl SnapshotStore {
             file_name: file_name.clone(),
             bytes: content.len() as u64,
             managed_keys: managed_keys.to_vec(),
+            sealed: false,
         };
 
         // Payload first, then metadata: a crash between the two leaves an
@@ -87,6 +118,130 @@ impl SnapshotStore {
             "snapshot created"
         );
 
+        Ok(Snapshot { meta, content })
+    }
+
+    /// Capture several files as one atomic restore point.
+    ///
+    /// OMP stores providers and model roles in two files. A restore that only
+    /// put one of them back would leave the other pointing at a provider that
+    /// no longer exists, so both are captured under one snapshot id.
+    pub fn create_bundle(
+        &self,
+        agent: &str,
+        files: &[SnapshotBundleFile],
+        reason: &str,
+        profile_id: Option<&str>,
+        managed_keys: &[String],
+    ) -> BridgeResult<Snapshot> {
+        let redacted: Vec<SnapshotBundleFile> = files
+            .iter()
+            .map(|file| SnapshotBundleFile {
+                path: file.path.clone(),
+                content: file
+                    .content
+                    .as_deref()
+                    .map(crate::diagnostics::redact::strip_credential_values),
+            })
+            .collect();
+        let bundle = SnapshotBundle {
+            version: 1,
+            files: redacted,
+        };
+        let content = serde_json::to_string_pretty(&bundle).map_err(|err| {
+            BridgeError::internal("Could not record the snapshot.").with_details(err.to_string())
+        })?;
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Local::now().to_rfc3339();
+        let sha256 = sha256_hex(content.as_bytes());
+        let file_name = format!("{id}.content");
+        let dir = self.snapshot_dir(agent);
+        std::fs::create_dir_all(&dir)?;
+        let meta = SnapshotMeta {
+            id: id.clone(),
+            agent: agent.to_string(),
+            created_at,
+            reason: reason.to_string(),
+            profile_id: profile_id.map(str::to_string),
+            sha256,
+            file_name: file_name.clone(),
+            bytes: content.len() as u64,
+            managed_keys: managed_keys.to_vec(),
+            sealed: false,
+        };
+        write_atomic(&dir.join(&file_name), content.as_bytes())?;
+        let meta_json = serde_json::to_string_pretty(&meta).map_err(|err| {
+            BridgeError::internal("Could not record the snapshot.").with_details(err.to_string())
+        })?;
+        write_atomic(&dir.join(format!("{id}.json")), meta_json.as_bytes())?;
+        self.prune(agent)?;
+        tracing::info!(
+            target: "eclink",
+            agent,
+            snapshot = %id,
+            reason,
+            "multi-file snapshot created"
+        );
+        Ok(Snapshot { meta, content })
+    }
+
+    /// Capture several files with the payload sealed by Windows DPAPI.
+    ///
+    /// OMP permits a literal `apiKey` in models.yml. Redacting it would make
+    /// Restore Original quietly lose the user's credential, so the exact bytes
+    /// are sealed instead: still restorable by this Windows user, never present
+    /// in plaintext in the snapshot directory.
+    pub fn create_bundle_sealed(
+        &self,
+        agent: &str,
+        files: &[SnapshotBundleFile],
+        reason: &str,
+        profile_id: Option<&str>,
+        managed_keys: &[String],
+    ) -> BridgeResult<Snapshot> {
+        let bundle = SnapshotBundle {
+            version: 1,
+            files: files.to_vec(),
+        };
+        let plain = serde_json::to_string_pretty(&bundle).map_err(|err| {
+            BridgeError::internal("Could not record the snapshot.").with_details(err.to_string())
+        })?;
+        let content = crate::backup::seal_backup_text(&plain)?;
+
+        let id = uuid::Uuid::new_v4().to_string();
+        let created_at = chrono::Local::now().to_rfc3339();
+        // Hash the plaintext so integrity has a stable meaning independent of
+        // DPAPI's per-call randomness.
+        let sha256 = sha256_hex(plain.as_bytes());
+        let file_name = format!("{id}.content");
+        let dir = self.snapshot_dir(agent);
+        std::fs::create_dir_all(&dir)?;
+        let meta = SnapshotMeta {
+            id: id.clone(),
+            agent: agent.to_string(),
+            created_at,
+            reason: reason.to_string(),
+            profile_id: profile_id.map(str::to_string),
+            sha256,
+            file_name: file_name.clone(),
+            bytes: plain.len() as u64,
+            managed_keys: managed_keys.to_vec(),
+            sealed: true,
+        };
+        write_atomic(&dir.join(&file_name), content.as_bytes())?;
+        let meta_json = serde_json::to_string_pretty(&meta).map_err(|err| {
+            BridgeError::internal("Could not record the snapshot.").with_details(err.to_string())
+        })?;
+        write_atomic(&dir.join(format!("{id}.json")), meta_json.as_bytes())?;
+        self.prune(agent)?;
+        tracing::info!(
+            target: "eclink",
+            agent,
+            snapshot = %id,
+            reason,
+            "sealed multi-file snapshot created"
+        );
         Ok(Snapshot { meta, content })
     }
 

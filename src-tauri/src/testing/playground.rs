@@ -327,6 +327,9 @@ mod tests {
             let protocol = match agent {
                 crate::adapters::AgentId::Claude => ApiProtocol::AnthropicMessages,
                 crate::adapters::AgentId::Codex => ApiProtocol::OpenAiResponses,
+                // OMP's protocol is chosen per profile; the production path
+                // reads `profile.omp.protocol`, not this static fallback.
+                crate::adapters::AgentId::Omp => ApiProtocol::OpenAiChatCompletions,
             };
             assert_eq!(protocol, expected, "{agent:?} uses the wrong API");
         }

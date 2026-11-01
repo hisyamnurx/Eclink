@@ -2,7 +2,9 @@
 
 use std::sync::Arc;
 
-use crate::adapters::{AgentAdapter, AgentId, ClaudeAdapter, CodexAdapter};
+use crate::adapters::{
+    AgentAdapter, AgentId, ClaudeAdapter, CodexAdapter, OmpAdapter, OmpSelection,
+};
 use crate::backup::BackupManager;
 use crate::diagnostics::{LogGuard, LogLevel};
 use crate::error::BridgeResult;
@@ -24,6 +26,8 @@ struct AppStateInner {
     /// backup manager they share.
     codex: CodexAdapter,
     claude: ClaudeAdapter,
+    omp: OmpAdapter,
+    omp_selection: OmpSelection,
     settings: std::sync::RwLock<AppSettings>,
     /// Held for the process lifetime so the log flusher stays alive.
     _log_guard: std::sync::Mutex<Option<LogGuard>>,
@@ -61,6 +65,26 @@ pub struct AppSettings {
     /// version keeps loading and simply reads as English.
     #[serde(default = "default_language")]
     pub language: String,
+    /// OMP named profile Eclink manages. `default` means the default profile.
+    ///
+    /// Defaulted so an `app.json` from v0.2.x keeps loading.
+    #[serde(default = "default_omp_profile")]
+    pub omp_profile: String,
+}
+
+fn default_omp_profile() -> String {
+    // Honour the profile the user's shell is already using when Eclink has no
+    // saved choice yet. `OMP_PROFILE` is canonical; `PI_PROFILE` is the legacy
+    // spelling. An invalid value falls back to the default profile rather than
+    // making the settings file unreadable.
+    for variable in ["OMP_PROFILE", "PI_PROFILE"] {
+        if let Ok(value) = std::env::var(variable) {
+            if let Ok(profile) = crate::adapters::omp::normalize_profile_name(&value) {
+                return profile;
+            }
+        }
+    }
+    "default".to_string()
 }
 
 /// The language an installation uses before the user chooses one.
@@ -116,6 +140,7 @@ impl Default for AppSettings {
             cost_notice_seen: false,
             insecure_endpoint_notice_seen: false,
             language: default_language(),
+            omp_profile: default_omp_profile(),
         }
     }
 }
@@ -146,6 +171,12 @@ impl AppState {
         // Both adapters share one backup manager, so the Original/Snapshot/
         // History ledger is rooted in the same place for every agent.
         let backups = BackupManager::new(paths.backups_dir());
+        let omp_selection = OmpSelection::new(settings.omp_profile.clone());
+        let omp = OmpAdapter::new(
+            backups.clone(),
+            paths.root().join("omp-ledger.json"),
+            omp_selection.clone(),
+        );
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
@@ -153,6 +184,8 @@ impl AppState {
                 secrets: SecretStore::new(paths.secrets_dat()),
                 codex: CodexAdapter::new(backups.clone()),
                 claude: ClaudeAdapter::new(backups),
+                omp,
+                omp_selection,
                 paths,
                 settings: std::sync::RwLock::new(settings),
                 _log_guard: std::sync::Mutex::new(log_guard),
@@ -185,12 +218,30 @@ impl AppState {
         match agent {
             AgentId::Codex => &self.inner.codex,
             AgentId::Claude => &self.inner.claude,
+            AgentId::Omp => &self.inner.omp,
         }
+    }
+
+    pub fn omp(&self) -> &OmpAdapter {
+        &self.inner.omp
+    }
+
+    pub fn omp_selection(&self) -> OmpSelection {
+        self.inner.omp_selection.clone()
     }
 
     /// Every adapter, for the agent list.
     pub fn adapters(&self) -> Vec<&dyn AgentAdapter> {
-        vec![&self.inner.codex, &self.inner.claude]
+        vec![&self.inner.codex, &self.inner.claude, &self.inner.omp]
+    }
+
+    /// Switch the OMP profile Eclink manages, persisting the choice.
+    pub fn set_omp_profile(&self, profile: &str) -> BridgeResult<String> {
+        let profile = self.inner.omp_selection.set(profile)?;
+        self.update_settings(|settings| {
+            settings.omp_profile = profile.clone();
+        })?;
+        Ok(profile)
     }
 
     /// The backup ledger rooted at this install's data directory.

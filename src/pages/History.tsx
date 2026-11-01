@@ -19,6 +19,7 @@ import {
   Modal,
   Tabs,
 } from "../components/ui";
+import { agentLabel } from "../lib/agents";
 import {
   call,
   type AgentId,
@@ -210,7 +211,7 @@ function SnapshotList({ agent }: { agent: AgentId }) {
           agent={agent}
           title={t("history.confirmRestoreSnapshot", { when: absoluteTime(confirm.createdAt) })}
           description={t("history.confirmRestoreSnapshotBody", {
-            agent: agent === "codex" ? "Codex" : "Claude Code",
+            agent: agentLabel(agent),
             label: confirm.label,
           })}
           onConfirm={() => call("restore_snapshot", { agent, snapshotId: confirm.id })}
@@ -325,22 +326,29 @@ function RecoveryPanel({ agent }: { agent: AgentId }) {
 
       <hr className="divider" />
 
-      <div className="stack stack--tight">
-        <h2>{t("history.resetTitle", { agent: agentSummary?.displayName ?? agent })}</h2>
-        <p className="card__hint">
-          {t("history.resetBody", { agent: agentSummary?.displayName ?? agent })}
-        </p>
-        {preview?.blockedByManaged?.length ? (
-          <p className="field__error" role="alert">
-            {t("history.managedWarning", { paths: preview.blockedByManaged.join(", ") })}
-          </p>
-        ) : null}
-        <div>
-          <Button variant="danger" onClick={() => setPending("stock")}>
-            {t("history.resetButton")}
-          </Button>
+      {agent === "omp" ? (
+        <div className="stack stack--tight">
+          <h2>{t("history.resetTitle", { agent: agentSummary?.displayName ?? agent })}</h2>
+          <p className="card__hint">{t("history.stockUnavailableOmp")}</p>
         </div>
-      </div>
+      ) : (
+        <div className="stack stack--tight">
+          <h2>{t("history.resetTitle", { agent: agentSummary?.displayName ?? agent })}</h2>
+          <p className="card__hint">
+            {t("history.resetBody", { agent: agentSummary?.displayName ?? agent })}
+          </p>
+          {preview?.blockedByManaged?.length ? (
+            <p className="field__error" role="alert">
+              {t("history.managedWarning", { paths: preview.blockedByManaged.join(", ") })}
+            </p>
+          ) : null}
+          <div>
+            <Button variant="danger" onClick={() => setPending("stock")}>
+              {t("history.resetButton")}
+            </Button>
+          </div>
+        </div>
+      )}
 
       {pending === "stock" ? (
         <StockResetDialog
@@ -544,7 +552,7 @@ function RestoreConfirmDialog({
       {outcome ? (
         <>
           <Banner tone="info" title={t("history.restored")}>
-            {t("history.restoredBody", { agent: agent === "codex" ? "Codex" : "Claude Code" })}
+            {t("history.restoredBody", { agent: agentLabel(agent) })}
           </Banner>
           <Meta
             items={[

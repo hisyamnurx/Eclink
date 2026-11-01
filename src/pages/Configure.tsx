@@ -27,11 +27,14 @@ import {
   type AdvancedOptions,
   type AuthMode,
   type CompatibilityStatus,
+  type OmpOptions,
+  type OmpPreview,
   type ProfileInput,
   type ProfileSummary,
   type ProviderTemplate,
   type TestOutcome,
 } from "../lib/api";
+import { agentLabel } from "../lib/agents";
 import { activationGate } from "../lib/compatibility";
 import { relativeTime } from "../lib/format";
 import { copyToClipboard } from "../lib/opener";
@@ -138,6 +141,8 @@ export function Configure({ initialAgent }: ConfigureProps) {
         </div>
       )}
 
+      {activeAgent === "omp" && <OmpProfilePicker />}
+
       <ProfileList
         agent={activeAgent}
         agentSummary={agentOptions.find((a) => a.agent === activeAgent)}
@@ -163,6 +168,65 @@ export function Configure({ initialAgent }: ConfigureProps) {
       )}
 
       <CostNoticeBanner />
+    </div>
+  );
+}
+
+/** Choose which OMP profile Eclink reads and writes. */
+function OmpProfilePicker() {
+  const { t, settings, reload, notify } = useApp();
+  const [profiles, setProfiles] = useState<import("../lib/api").OmpProfileSummary[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void call("list_omp_profiles")
+      .then((list) => {
+        if (!cancelled) setProfiles(list);
+      })
+      .catch(() => {
+        if (!cancelled) setProfiles([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const selected = settings?.ompProfile ?? "default";
+
+  return (
+    <div className="omp-profile-picker">
+      <Field label={t("omp.profileLabel")} htmlFor="omp-profile" hint={t("omp.profileHint")}>
+        <select
+          id="omp-profile"
+          className="select"
+          value={selected}
+          disabled={busy}
+          onChange={(event) => {
+            const next = event.target.value;
+            setBusy(true);
+            void call("set_omp_profile", { profile: next })
+              .then(async () => {
+                await reload();
+                notify("success", t("omp.profileChanged", { profile: next }));
+              })
+              .catch(() => {
+                // The action error is shown by the shared error surface.
+              })
+              .finally(() => setBusy(false));
+          }}
+        >
+          {!profiles.some((profile) => profile.name === selected) && (
+            <option value={selected}>{selected}</option>
+          )}
+          {profiles.map((profile) => (
+            <option key={profile.name} value={profile.name}>
+              {profile.label} - {profile.configDir}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <p className="muted small">{t("omp.profileSwitchNote")}</p>
     </div>
   );
 }
@@ -288,6 +352,8 @@ function ProfileRow({
   const testAction = useAction();
   const activateAction = useAction();
   const [outcome, setOutcome] = useState<TestOutcome | null>(null);
+  const [ompPreview, setOmpPreview] = useState<OmpPreview | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
 
   const record = profile.compatibility?.[agent];
   // Both the badge and the Activate button come from this one value, so they
@@ -345,7 +411,7 @@ function ProfileRow({
       // test also writes a compatibility record that the badge must reflect.
       .then(onChanged);
 
-  const activate = () =>
+  const activateNow = () =>
     void activateAction
       .run(
         async () => {
@@ -360,6 +426,23 @@ function ProfileRow({
         },
       )
       .then(onChanged);
+
+  const activate = () => {
+    if (agent !== "omp") {
+      activateNow();
+      return;
+    }
+    // Activation writes two YAML files. Show the exact provider, role changes,
+    // and any ownership conflict before touching either of them.
+    setPreviewBusy(true);
+    void call("preview_saved_omp_profile", { id: profile.id })
+      .then((result) => setOmpPreview(result))
+      .catch(() => {
+        // The normal action error surface reports the actionable message.
+        activateNow();
+      })
+      .finally(() => setPreviewBusy(false));
+  };
 
   return (
     <div className={`list-row${isActive ? " list-row--active" : ""}`}>
@@ -380,7 +463,9 @@ function ProfileRow({
           )}
           {" · "}
           {t("providers.targets")}{" "}
-          {profile.targets.length > 0 ? profile.targets.join(", ") : t("providers.nothing")}
+          {profile.targets.length > 0
+            ? profile.targets.map(agentLabel).join(", ")
+            : t("providers.nothing")}
         </div>
 
         {outcome && outcome.profileId === profile.id && (
@@ -406,7 +491,7 @@ function ProfileRow({
           size="sm"
           variant="primary"
           onClick={activate}
-          busy={activateAction.busy}
+          busy={activateAction.busy || previewBusy}
           disabled={!gate.canActivate || isActive}
           // Comes from the same gate the badge uses, so the tooltip cannot claim
           // the provider needs testing while the badge already says Compatible.
@@ -434,7 +519,94 @@ function ProfileRow({
           {t("action.delete")}
         </Button>
       </div>
+
+      {ompPreview && (
+        <OmpActivateDialog
+          preview={ompPreview}
+          onClose={() => setOmpPreview(null)}
+          onConfirm={() => {
+            setOmpPreview(null);
+            activateNow();
+          }}
+        />
+      )}
     </div>
+  );
+}
+
+/** Show the exact two-file OMP mutation before the user commits to it. */
+function OmpActivateDialog({
+  preview,
+  onClose,
+  onConfirm,
+}: {
+  preview: OmpPreview;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const { t } = useApp();
+  return (
+    <Modal
+      title={t("omp.previewTitle")}
+      onClose={onClose}
+      wide
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose}>
+            {t("action.cancel")}
+          </Button>
+          <Button variant="primary" onClick={onConfirm} disabled={Boolean(preview.conflict)}>
+            {t("action.activate")}
+          </Button>
+        </>
+      }
+    >
+      {preview.conflict && (
+        <Banner tone="bad" title={t("omp.conflictTitle")}>
+          {preview.conflict}
+        </Banner>
+      )}
+      <dl className="meta-list">
+        <div>
+          <dt>{t("omp.profileLabel")}</dt>
+          <dd className="mono">{preview.profile}</dd>
+        </div>
+        <div>
+          <dt>{t("omp.configDir")}</dt>
+          <dd className="mono">{preview.configDir}</dd>
+        </div>
+        <div>
+          <dt>{t("omp.providerId")}</dt>
+          <dd className="mono">{preview.providerId}</dd>
+        </div>
+        <div>
+          <dt>{t("omp.api")}</dt>
+          <dd className="mono">{preview.api}</dd>
+        </div>
+        <div>
+          <dt>{t("omp.selector")}</dt>
+          <dd className="mono">{preview.selector}</dd>
+        </div>
+      </dl>
+      <h3 className="section-title">{t("omp.roles")}</h3>
+      <ul className="plain-list">
+        {preview.roles.map((role) => (
+          <li key={role.role}>
+            <code className="mono">{role.role}</code> →{" "}
+            <code className="mono">{role.selector}</code>
+            {role.previous && role.previous !== role.selector && (
+              <span className="muted small"> ({t("omp.replaces", { value: role.previous })})</span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {preview.notes.map((note) => (
+        <p className="muted small" key={note}>
+          {note}
+        </p>
+      ))}
+      <p className="muted small">{t("omp.previewSafety")}</p>
+    </Modal>
   );
 }
 
@@ -535,9 +707,7 @@ function DeleteProfileDialog({
           {t("delete.activeBody", {
             agent:
               impactDetail && impactDetail.activeFor.length > 0
-                ? impactDetail.activeFor
-                    .map((item) => (item === "codex" ? "Codex" : "Claude Code"))
-                    .join(t("delete.agentJoin"))
+                ? impactDetail.activeFor.map((item) => agentLabel(item)).join(t("delete.agentJoin"))
                 : t("delete.anAgent"),
             name: profile.name,
           })}
@@ -560,7 +730,7 @@ function DeleteProfileDialog({
 
 /* --- Editor ----------------------------------------------------------- */
 
-type EditorTab = "general" | "advanced";
+type EditorTab = "general" | "omp" | "advanced";
 
 interface EditorState {
   id?: string;
@@ -573,6 +743,7 @@ interface EditorState {
   targets: AgentId[];
   notes: string;
   advanced: AdvancedOptions;
+  omp: OmpOptions;
   allowInsecure: boolean;
 }
 
@@ -587,6 +758,7 @@ function blankEditor(defaultAgent: AgentId): EditorState {
     targets: [defaultAgent],
     notes: "",
     advanced: {},
+    omp: { protocol: "open_ai_completions" },
     allowInsecure: false,
   };
 }
@@ -603,6 +775,7 @@ function editorFrom(profile: ProfileSummary): EditorState {
     targets: [...profile.targets],
     notes: profile.notes ?? "",
     advanced: profile.advanced ?? {},
+    omp: profile.omp ?? { protocol: "open_ai_completions" },
     allowInsecure: profile.advanced?.allowInsecureEndpoint ?? false,
   };
 }
@@ -716,6 +889,7 @@ function ProfileEditor({
             ...state.advanced,
             allowInsecureEndpoint: state.allowInsecure,
           },
+          omp: state.targets.includes("omp") ? state.omp : undefined,
         };
         // An empty field means "leave the stored key alone", never "clear it".
         if (state.clearApiKey) {
@@ -786,6 +960,17 @@ function ProfileEditor({
         >
           {t("editor.tabGeneral")}
         </button>
+        {state.targets.includes("omp") && (
+          <button
+            role="tab"
+            type="button"
+            className="tab"
+            aria-selected={tab === "omp"}
+            onClick={() => setTab("omp")}
+          >
+            {t("omp.tab")}
+          </button>
+        )}
         <button
           role="tab"
           type="button"
@@ -990,6 +1175,8 @@ function ProfileEditor({
             </div>
           )}
         </>
+      ) : tab === "omp" ? (
+        <OmpEditor state={state} patch={patch} />
       ) : (
         <AdvancedEditor
           state={state}
@@ -1008,6 +1195,132 @@ function wouldBeInsecure(state: EditorState): boolean {
   // localhost, 127.0.0.1, ::1 and .local are treated as local by the backend and
   // do not need the warning.
   return !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\]|0\.0\.0\.0|[^/]*\.local)(:|\/|$)/i.test(url);
+}
+
+function parseOptionalPositive(value: string): number | undefined {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
+}
+
+function OmpEditor({
+  state,
+  patch,
+}: {
+  state: EditorState;
+  patch: (changes: Partial<EditorState>) => void;
+}) {
+  const { t } = useApp();
+  const setOmp = (changes: Partial<OmpOptions>) => patch({ omp: { ...state.omp, ...changes } });
+
+  return (
+    <>
+      <Banner tone="info" title={t("omp.editorTitle")}>
+        {t("omp.editorBody")}
+      </Banner>
+
+      <Field label={t("omp.api")} htmlFor="omp-api" hint={t("omp.apiHint")}>
+        <select
+          id="omp-api"
+          className="select"
+          value={state.omp.protocol}
+          onChange={(event) => setOmp({ protocol: event.target.value as OmpOptions["protocol"] })}
+        >
+          <option value="open_ai_completions">{t("omp.apiCompletions")}</option>
+          <option value="open_ai_responses">{t("omp.apiResponses")}</option>
+          <option value="anthropic_messages">{t("omp.apiAnthropic")}</option>
+        </select>
+      </Field>
+
+      <Field label={t("omp.defaultModel")} htmlFor="omp-default" hint={t("omp.defaultModelHint")}>
+        <input
+          id="omp-default"
+          className="input mono"
+          value={state.omp.defaultModel ?? ""}
+          onChange={(event) => setOmp({ defaultModel: event.target.value || undefined })}
+          placeholder="eclink-omp-provider-1234abcd/model-id"
+          spellCheck={false}
+        />
+      </Field>
+
+      <div className="grid-2">
+        <Field label={t("omp.smol")} htmlFor="omp-smol" hint={t("omp.roleHint")}>
+          <input
+            id="omp-smol"
+            className="input mono"
+            value={state.omp.smol ?? ""}
+            onChange={(event) => setOmp({ smol: event.target.value || undefined })}
+            placeholder={t("omp.rolePlaceholder")}
+            spellCheck={false}
+          />
+        </Field>
+        <Field label={t("omp.slow")} htmlFor="omp-slow" hint={t("omp.roleHint")}>
+          <input
+            id="omp-slow"
+            className="input mono"
+            value={state.omp.slow ?? ""}
+            onChange={(event) => setOmp({ slow: event.target.value || undefined })}
+            placeholder={t("omp.rolePlaceholder")}
+            spellCheck={false}
+          />
+        </Field>
+      </div>
+
+      <Field label={t("omp.plan")} htmlFor="omp-plan" hint={t("omp.roleHint")}>
+        <input
+          id="omp-plan"
+          className="input mono"
+          value={state.omp.plan ?? ""}
+          onChange={(event) => setOmp({ plan: event.target.value || undefined })}
+          placeholder={t("omp.rolePlaceholder")}
+          spellCheck={false}
+        />
+      </Field>
+
+      <Field label={t("omp.modelName")} htmlFor="omp-name" hint={t("omp.modelNameHint")}>
+        <input
+          id="omp-name"
+          className="input"
+          value={state.omp.modelName ?? ""}
+          onChange={(event) => setOmp({ modelName: event.target.value || undefined })}
+          placeholder={state.model || t("omp.modelNamePlaceholder")}
+        />
+      </Field>
+
+      <div className="grid-2">
+        <Field
+          label={t("omp.contextWindow")}
+          htmlFor="omp-context"
+          hint={t("omp.contextWindowHint")}
+        >
+          <input
+            id="omp-context"
+            className="input mono"
+            inputMode="numeric"
+            value={state.omp.contextWindow ?? ""}
+            onChange={(event) =>
+              setOmp({
+                contextWindow: parseOptionalPositive(event.target.value),
+              })
+            }
+            placeholder="128000"
+          />
+        </Field>
+        <Field label={t("omp.maxTokens")} htmlFor="omp-max-tokens" hint={t("omp.maxTokensHint")}>
+          <input
+            id="omp-max-tokens"
+            className="input mono"
+            inputMode="numeric"
+            value={state.omp.maxTokens ?? ""}
+            onChange={(event) => setOmp({ maxTokens: parseOptionalPositive(event.target.value) })}
+            placeholder="16384"
+          />
+        </Field>
+      </div>
+
+      <p className="muted small">{t("omp.rolePreserved")}</p>
+    </>
+  );
 }
 
 function AdvancedEditor({

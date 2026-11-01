@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 pub enum AgentId {
     Codex,
     Claude,
+    /// Oh My Pi (`omp`). Deliberately distinct from the original Pi CLI.
+    Omp,
 }
 
 impl AgentId {
@@ -19,6 +21,7 @@ impl AgentId {
         match self {
             AgentId::Codex => "codex",
             AgentId::Claude => "claude",
+            AgentId::Omp => "omp",
         }
     }
 
@@ -26,6 +29,7 @@ impl AgentId {
         match self {
             AgentId::Codex => "Codex",
             AgentId::Claude => "Claude Code",
+            AgentId::Omp => "Oh My Pi",
         }
     }
 
@@ -33,12 +37,114 @@ impl AgentId {
         match value.to_ascii_lowercase().as_str() {
             "codex" => Some(AgentId::Codex),
             "claude" | "claude_code" | "claudecode" => Some(AgentId::Claude),
+            "omp" | "oh_my_pi" | "oh-my-pi" | "ohmy pi" => Some(AgentId::Omp),
             _ => None,
         }
     }
 
-    pub fn all() -> [AgentId; 2] {
-        [AgentId::Codex, AgentId::Claude]
+    pub fn all() -> [AgentId; 3] {
+        [AgentId::Codex, AgentId::Claude, AgentId::Omp]
+    }
+}
+
+/// Wire protocol OMP uses for a profile's custom provider.
+///
+/// These are OMP's own `api:` values, not a guess from the model name. DeepSeek
+/// models, for example, are served through all three shapes by different
+/// gateways.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OmpApiProtocol {
+    #[default]
+    OpenAiCompletions,
+    OpenAiResponses,
+    AnthropicMessages,
+}
+
+impl OmpApiProtocol {
+    pub fn as_omp_str(self) -> &'static str {
+        match self {
+            OmpApiProtocol::OpenAiCompletions => "openai-completions",
+            OmpApiProtocol::OpenAiResponses => "openai-responses",
+            OmpApiProtocol::AnthropicMessages => "anthropic-messages",
+        }
+    }
+
+    pub fn code(self) -> &'static str {
+        match self {
+            OmpApiProtocol::OpenAiCompletions => "openai_completions",
+            OmpApiProtocol::OpenAiResponses => "openai_responses",
+            OmpApiProtocol::AnthropicMessages => "anthropic_messages",
+        }
+    }
+
+    /// Convert from the existing tester's protocol vocabulary.
+    pub fn from_api_protocol(protocol: crate::profiles::ApiProtocol) -> Self {
+        match protocol {
+            crate::profiles::ApiProtocol::OpenAiChatCompletions => {
+                OmpApiProtocol::OpenAiCompletions
+            }
+            crate::profiles::ApiProtocol::OpenAiResponses => OmpApiProtocol::OpenAiResponses,
+            crate::profiles::ApiProtocol::AnthropicMessages => OmpApiProtocol::AnthropicMessages,
+        }
+    }
+}
+
+/// OMP-only settings attached to an Eclink provider profile.
+///
+/// Every field defaults, so a `profiles.json` written before v0.3.0 loads
+/// unchanged. Model-role values are OMP selectors (`provider/model-id`); an
+/// empty optional role means "leave the user's role alone".
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OmpOptions {
+    #[serde(default)]
+    pub protocol: OmpApiProtocol,
+    /// Default role selector. Empty means `<managed provider>/<profile model>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    /// Optional `smol` role selector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smol: Option<String>,
+    /// Optional `slow` role selector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub slow: Option<String>,
+    /// Optional `plan` role selector.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+    /// Optional model display name written to `models.yml`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_name: Option<String>,
+    /// Optional context window, only when the user has evidence for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    /// Optional maximum output tokens, only when the user has evidence for it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+}
+
+impl OmpOptions {
+    /// Roles that activation should write. `default` is always present; optional
+    /// roles appear only when the user explicitly assigned one.
+    pub fn role_assignments(&self, fallback_selector: &str) -> Vec<(String, String)> {
+        let default = self
+            .default_model
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(fallback_selector)
+            .to_string();
+        let mut roles = vec![("default".to_string(), default)];
+        for (name, value) in [
+            ("smol", self.smol.as_deref()),
+            ("slow", self.slow.as_deref()),
+            ("plan", self.plan.as_deref()),
+        ] {
+            if let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) {
+                roles.push((name.to_string(), value.to_string()));
+            }
+        }
+        roles
     }
 }
 
@@ -228,6 +334,10 @@ pub struct Profile {
     pub targets: Vec<AgentId>,
     #[serde(default)]
     pub advanced: AdvancedOptions,
+    /// OMP-only protocol and model-role assignments. Defaulted so a profile
+    /// written by any earlier Eclink version loads unchanged.
+    #[serde(default)]
+    pub omp: OmpOptions,
     /// Per-agent cached compatibility results.
     #[serde(default)]
     pub compatibility: std::collections::BTreeMap<AgentId, CompatibilityRecord>,
@@ -265,6 +375,7 @@ impl Profile {
             secret_ref: None,
             targets,
             advanced: AdvancedOptions::default(),
+            omp: OmpOptions::default(),
             compatibility: Default::default(),
             notes: None,
             created_at: now.clone(),
@@ -311,13 +422,19 @@ impl Profile {
     /// Changing any input invalidates the cache (PRD §45).
     pub fn compatibility_stale_key(&self, agent: AgentId, agent_version: Option<&str>) -> String {
         let secret_marker = self.secret_ref.as_deref().unwrap_or("none");
+        let protocol = if agent == AgentId::Omp {
+            self.omp.protocol.as_omp_str()
+        } else {
+            "native"
+        };
         format!(
-            "v1|{}|{}|{}|{}|{}|{}",
+            "v2|{}|{}|{}|{}|{}|{}|{}",
             self.base_url.trim_end_matches('/'),
             self.wire_model(),
             secret_marker,
             agent.as_str(),
             agent_version.unwrap_or("unknown"),
+            protocol,
             crate::APP_VERSION
         )
     }
@@ -363,8 +480,56 @@ impl Profile {
             return Err("Select at least one target agent.".into());
         }
         validate_base_url(&self.base_url)?;
+        if self.targets.contains(&AgentId::Omp) {
+            for (label, selector) in [
+                ("Default model", self.omp.default_model.as_deref()),
+                ("Smol model", self.omp.smol.as_deref()),
+                ("Slow model", self.omp.slow.as_deref()),
+                ("Plan model", self.omp.plan.as_deref()),
+            ] {
+                if let Some(selector) = selector.map(str::trim).filter(|value| !value.is_empty()) {
+                    validate_omp_selector(selector)
+                        .map_err(|reason| format!("{label}: {reason}"))?;
+                }
+            }
+            for (label, value) in [
+                ("Model display name", self.omp.model_name.as_deref()),
+                ("Model ID", Some(self.model.as_str())),
+            ] {
+                if let Some(value) = value {
+                    if value.contains('\n') || value.contains('\r') {
+                        return Err(format!("{label} may not contain a line break."));
+                    }
+                }
+            }
+        }
         Ok(())
     }
+}
+
+/// Validate an OMP model selector without rejecting legitimate literal IDs.
+///
+/// OMP selectors are `provider/model[:thinking]`. Model IDs may themselves
+/// contain `/`, `:`, `_`, `-`, and dots, so this only rejects empty parts,
+/// control characters, and values that would escape into shell/YAML syntax.
+pub fn validate_omp_selector(selector: &str) -> Result<(), String> {
+    let trimmed = selector.trim();
+    if trimmed.is_empty() {
+        return Err("a model selector is required".into());
+    }
+    if trimmed.chars().any(char::is_control) {
+        return Err("the selector contains a control character".into());
+    }
+    if trimmed.starts_with('-') {
+        return Err("the selector may not begin with a hyphen".into());
+    }
+    let (provider, rest) = trimmed
+        .split_once('/')
+        .ok_or_else(|| "use a provider/model selector".to_string())?;
+    if provider.trim().is_empty() || rest.trim().is_empty() {
+        return Err("use a non-empty provider/model selector".into());
+    }
+    Ok(())
 }
 
 /// Validate and normalise a base URL.
@@ -464,6 +629,19 @@ pub fn managed_provider_id(profile: &Profile) -> String {
         "{}{}_{}",
         crate::MANAGED_PROVIDER_PREFIX,
         slugify(&profile.provider_name),
+        profile.id.chars().take(8).collect::<String>()
+    )
+}
+
+/// Deterministic, human-readable, collision-resistant OMP provider ID.
+///
+/// The `eclink-omp-` namespace is distinct from the historical Codex prefix,
+/// and OMP provider IDs are YAML mapping keys. Hyphens are accepted by OMP and
+/// make the ownership marker unambiguous to a user reading `models.yml`.
+pub fn omp_managed_provider_id(profile: &Profile) -> String {
+    format!(
+        "eclink-omp-{}-{}",
+        slugify(&profile.provider_name).replace('_', "-"),
         profile.id.chars().take(8).collect::<String>()
     )
 }

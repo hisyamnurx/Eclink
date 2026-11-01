@@ -92,10 +92,10 @@ const en = {
   "home.openAgent": "Open {agent}",
   "home.checkingSetup": "Checking your setup...",
   "home.intro":
-    "Eclink points Codex and Claude Code at the provider you choose, without you editing configuration files by hand.",
+    "Eclink points Codex, Claude Code, and Oh My Pi at the provider you choose, without you editing configuration files by hand.",
   "home.setUpProvider": "Set up a provider",
   "home.noAgentsLong":
-    "Eclink could not find Codex or Claude Code on this machine. Install one, then choose Refresh.",
+    "Eclink could not find Codex, Claude Code, or Oh My Pi on this machine. Install one, then choose Refresh.",
   "home.notFoundTitle": "{agent} was not found",
   "home.notFoundBody":
     "Eclink installs nothing on your behalf. Install {agent}, then choose Refresh.",
@@ -142,7 +142,7 @@ const en = {
   "providers.tested": "tested {when}",
   "providers.loading": "Loading your providers...",
   "providers.yourAgent": "your agent",
-  "providers.noAgentsBody": "Install Codex or Claude Code, then reload this page.",
+  "providers.noAgentsBody": "Install Codex, Claude Code, or Oh My Pi, then reload this page.",
   "providers.costNoticeTitle": "Testing uses your provider account",
   "providers.costNoticeBody":
     "Test Connection and the Playground send real requests to your provider and may count towards your usage or cost. Eclink never sends anything on its own.",
@@ -198,7 +198,7 @@ const en = {
   "editor.clearKeyHint":
     "The provider stays, but it cannot be activated until a new key is entered.",
   "editor.targetsHintProtocols":
-    "Codex and Claude Code speak different protocols. Each is tested separately.",
+    "Each agent is tested separately. Oh My Pi also needs an API protocol and optional model roles.",
   "editor.insecureTitle": "Insecure Endpoint",
   "editor.insecureBody":
     "Your API key may be sent without encryption. The endpoint below uses plain HTTP and is not on this machine.",
@@ -350,6 +350,8 @@ const en = {
   "history.reversibleNote":
     "The state you just replaced was snapshotted, so this is reversible from the Snapshots list.",
   "history.restoredBody": "{agent} configuration has been written and verified.",
+  "history.stockUnavailableOmp":
+    "A full stock reset is not offered for Oh My Pi because OMP has no single built-in gateway to return to. Use Restore Default to remove Eclink's provider and roles, or Restore Original to return to the files from before Eclink first changed them.",
 
   // ---- playground ------------------------------------------------------
   "playground.title": "Playground",
@@ -472,6 +474,50 @@ const en = {
   "error.testResultsCopyFailed": "Could not copy the test results.",
   "error.copyDiagnosticsFailed": "Could not copy the diagnostics.",
 
+  // ---- Oh My Pi --------------------------------------------------------
+  "omp.tab": "Oh My Pi",
+  "omp.editorTitle": "Oh My Pi settings",
+  "omp.editorBody":
+    "OMP reads a custom provider from models.yml and model roles from config.yml. Eclink edits only its own provider and the roles you assign here; comments and every other provider stay untouched.",
+  "omp.profileLabel": "OMP profile",
+  "omp.profileHint":
+    "Named OMP profiles keep separate settings, credentials, sessions, and caches. Switching changes only which profile Eclink reads.",
+  "omp.profileSwitchNote":
+    "Changing the profile does not modify either profile's files. Run Test Connection again for the newly selected profile.",
+  "omp.profileChanged": "Now managing the OMP profile “{profile}”.",
+  "omp.api": "API protocol",
+  "omp.apiHint":
+    "Match what the gateway actually serves. Eclink writes this exact value to OMP's `api` field.",
+  "omp.apiCompletions": "OpenAI Chat Completions",
+  "omp.apiResponses": "OpenAI Responses",
+  "omp.apiAnthropic": "Anthropic Messages",
+  "omp.defaultModel": "Default model selector",
+  "omp.defaultModelHint":
+    "Optional. Leave empty to use the Eclink provider and the profile's Model ID.",
+  "omp.smol": "Smol role",
+  "omp.slow": "Slow role",
+  "omp.plan": "Plan role",
+  "omp.roleHint": "Optional. provider/model, exactly as OMP displays it.",
+  "omp.rolePlaceholder": "provider/model",
+  "omp.rolePreserved":
+    "Roles left empty are never changed. Restore Default puts back only the role values Eclink wrote, and leaves a role you edited afterwards alone.",
+  "omp.contextWindow": "Context window",
+  "omp.contextWindowHint": "Optional. Tokens the model accepts, when your gateway documents it.",
+  "omp.maxTokens": "Max output tokens",
+  "omp.maxTokensHint": "Optional. Maximum tokens the model may generate.",
+  "omp.modelName": "Display name",
+  "omp.modelNameHint": "Shown by OMP in its model picker. Defaults to the Model ID.",
+  "omp.modelNamePlaceholder": "My gateway model",
+  "omp.previewTitle": "Review Oh My Pi activation",
+  "omp.previewSafety":
+    "Both files are snapshotted before writing. The API key is never written: models.yml contains a command that resolves it from Windows DPAPI, and Eclink verifies the result with OMP before reporting success.",
+  "omp.providerId": "Provider ID",
+  "omp.selector": "Default selector",
+  "omp.configDir": "OMP config directory",
+  "omp.roles": "Model roles",
+  "omp.replaces": "replaces {value}",
+  "omp.conflictTitle": "This provider ID is not Eclink's",
+
   // ---- update banner ---------------------------------------------------
   "update.bannerTitle": "Eclink {version} is available",
   "update.bannerBody": "You are running {current}. Open Settings to review and install it.",
@@ -550,10 +596,10 @@ const id: Dictionary = {
   "home.openAgent": "Buka {agent}",
   "home.checkingSetup": "Memeriksa setup kamu...",
   "home.intro":
-    "Eclink mengarahkan Codex dan Claude Code ke provider pilihanmu, tanpa perlu mengedit file konfigurasi sendiri.",
+    "Eclink mengarahkan Codex, Claude Code, dan Oh My Pi ke provider pilihanmu, tanpa perlu mengedit file konfigurasi sendiri.",
   "home.setUpProvider": "Siapkan provider",
   "home.noAgentsLong":
-    "Eclink tidak menemukan Codex atau Claude Code di komputer ini. Install salah satunya, lalu pilih Muat ulang.",
+    "Eclink tidak menemukan Codex, Claude Code, atau Oh My Pi di komputer ini. Install salah satunya, lalu pilih Muat ulang.",
   "home.notFoundTitle": "{agent} tidak ditemukan",
   "home.notFoundBody":
     "Eclink tidak menginstall apa pun untukmu. Install {agent}, lalu pilih Muat ulang.",
@@ -598,7 +644,8 @@ const id: Dictionary = {
   "providers.tested": "dites {when}",
   "providers.loading": "Memuat provider kamu...",
   "providers.yourAgent": "agent kamu",
-  "providers.noAgentsBody": "Install Codex atau Claude Code, lalu muat ulang halaman ini.",
+  "providers.noAgentsBody":
+    "Install Codex, Claude Code, atau Oh My Pi, lalu muat ulang halaman ini.",
   "providers.costNoticeTitle": "Tes memakai akun provider kamu",
   "providers.costNoticeBody":
     "Test Connection dan Playground mengirim request asli ke provider-mu dan bisa terhitung pemakaian atau biaya. Eclink tidak pernah mengirim apa pun sendiri.",
@@ -655,7 +702,7 @@ const id: Dictionary = {
   "editor.clearKeyHint":
     "Provider-nya tetap ada, tapi tidak bisa diaktifkan sampai ada API key baru.",
   "editor.targetsHintProtocols":
-    "Codex dan Claude Code memakai protokol yang berbeda. Masing-masing dites terpisah.",
+    "Setiap agent dites terpisah. Oh My Pi juga butuh protokol API dan model role opsional.",
   "editor.insecureTitle": "Endpoint tidak aman",
   "editor.insecureBody":
     "API key kamu bisa terkirim tanpa enkripsi. Endpoint di bawah memakai HTTP biasa dan bukan di mesin ini.",
@@ -807,6 +854,8 @@ const id: Dictionary = {
   "history.reversibleNote":
     "Kondisi yang baru kamu ganti sudah disimpan sebagai snapshot, jadi masih bisa dikembalikan dari daftar Snapshot.",
   "history.restoredBody": "Konfigurasi {agent} sudah ditulis dan diverifikasi.",
+  "history.stockUnavailableOmp":
+    "Reset penuh ke setelan bawaan tidak disediakan untuk Oh My Pi karena OMP tidak punya satu gateway bawaan untuk dikembalikan. Pakai Restore Default untuk menghapus provider dan role Eclink, atau Restore Original untuk kembali ke file sebelum Eclink mengubahnya.",
 
   "playground.title": "Playground",
   "playground.subtitle":
@@ -928,6 +977,51 @@ const id: Dictionary = {
   "error.noAgents": "Tidak ada coding agent terdeteksi",
   "error.testResultsCopyFailed": "Tidak bisa menyalin hasil tes.",
   "error.copyDiagnosticsFailed": "Tidak bisa menyalin diagnostik.",
+
+  // ---- Oh My Pi --------------------------------------------------------
+  "omp.tab": "Oh My Pi",
+  "omp.editorTitle": "Setelan Oh My Pi",
+  "omp.editorBody":
+    "OMP membaca custom provider dari models.yml dan model role dari config.yml. Eclink hanya mengubah provider miliknya dan role yang kamu tetapkan di sini; komentar dan provider lain tetap utuh.",
+  "omp.profileLabel": "Profil OMP",
+  "omp.profileHint":
+    "Profil bernama di OMP memisahkan setelan, kredensial, sesi, dan cache. Mengganti profil hanya mengubah profil mana yang dibaca Eclink.",
+  "omp.profileSwitchNote":
+    "Mengganti profil tidak mengubah file profil mana pun. Jalankan Tes Koneksi lagi untuk profil yang baru dipilih.",
+  "omp.profileChanged": "Sekarang mengelola profil OMP “{profile}”.",
+  "omp.api": "Protokol API",
+  "omp.apiHint":
+    "Samakan dengan yang benar-benar dilayani gateway. Eclink menulis nilai ini persis ke field `api` milik OMP.",
+  "omp.apiCompletions": "OpenAI Chat Completions",
+  "omp.apiResponses": "OpenAI Responses",
+  "omp.apiAnthropic": "Anthropic Messages",
+  "omp.defaultModel": "Selector model default",
+  "omp.defaultModelHint":
+    "Opsional. Biarkan kosong untuk memakai provider Eclink dan Model ID profil.",
+  "omp.smol": "Role smol",
+  "omp.slow": "Role slow",
+  "omp.plan": "Role plan",
+  "omp.roleHint": "Opsional. provider/model, persis seperti yang ditampilkan OMP.",
+  "omp.rolePlaceholder": "provider/model",
+  "omp.rolePreserved":
+    "Role yang dibiarkan kosong tidak pernah diubah. Restore Default hanya mengembalikan nilai role yang ditulis Eclink, dan membiarkan role yang kamu ubah setelahnya.",
+  "omp.contextWindow": "Context window",
+  "omp.contextWindowHint":
+    "Opsional. Jumlah token yang diterima model, jika gateway mendokumentasikannya.",
+  "omp.maxTokens": "Maks token output",
+  "omp.maxTokensHint": "Opsional. Jumlah maksimum token yang boleh dihasilkan model.",
+  "omp.modelName": "Nama tampilan",
+  "omp.modelNameHint": "Ditampilkan OMP di pemilih model. Default-nya Model ID.",
+  "omp.modelNamePlaceholder": "Model gateway saya",
+  "omp.previewTitle": "Tinjau aktivasi Oh My Pi",
+  "omp.previewSafety":
+    "Kedua file di-snapshot sebelum ditulis. API key tidak pernah ditulis: models.yml berisi perintah yang mengambilnya dari Windows DPAPI, dan Eclink memverifikasi hasilnya lewat OMP sebelum melaporkan sukses.",
+  "omp.providerId": "ID provider",
+  "omp.selector": "Selector default",
+  "omp.configDir": "Direktori konfigurasi OMP",
+  "omp.roles": "Model role",
+  "omp.replaces": "menggantikan {value}",
+  "omp.conflictTitle": "ID provider ini bukan milik Eclink",
 
   "update.bannerTitle": "Eclink {version} tersedia",
   "update.bannerBody": "Kamu memakai {current}. Buka Pengaturan untuk meninjau dan memasangnya.",

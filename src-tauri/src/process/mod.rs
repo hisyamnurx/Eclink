@@ -99,6 +99,33 @@ pub fn build_launch_plan(
     build_launch_plan_for(agent, agent_executable, project_dir, kind, &terminal)
 }
 
+/// Build a launch plan with agent arguments (for example OMP's `--profile`).
+///
+/// The arguments are separate argv entries for Windows Terminal and are quoted
+/// as PowerShell literals in the fallback. They are never concatenated into a
+/// shell command without quoting, so a model selector cannot become a command.
+pub fn build_launch_plan_with_args(
+    agent: AgentId,
+    agent_executable: &Path,
+    project_dir: &Path,
+    agent_args: &[String],
+) -> BridgeResult<LaunchPlan> {
+    let (terminal, is_wt) = resolve_terminal();
+    let kind = if is_wt {
+        TerminalKind::WindowsTerminal
+    } else {
+        TerminalKind::PowerShell
+    };
+    build_launch_plan_with_args_for(
+        agent,
+        agent_executable,
+        project_dir,
+        agent_args,
+        kind,
+        &terminal,
+    )
+}
+
 /// Build a launch plan for an explicitly chosen terminal host.
 ///
 /// [`build_launch_plan`] is the production entry point; this variant exists so
@@ -110,21 +137,41 @@ pub fn build_launch_plan_for(
     kind: TerminalKind,
     terminal: &Path,
 ) -> BridgeResult<LaunchPlan> {
+    build_launch_plan_with_args_for(agent, agent_executable, project_dir, &[], kind, terminal)
+}
+
+fn build_launch_plan_with_args_for(
+    agent: AgentId,
+    agent_executable: &Path,
+    project_dir: &Path,
+    agent_args: &[String],
+    kind: TerminalKind,
+    terminal: &Path,
+) -> BridgeResult<LaunchPlan> {
     let working_dir = normalize_project_dir(project_dir)?;
     let workdir_str = working_dir.display().to_string();
     let exe_str = agent_executable.display().to_string();
+    for arg in agent_args {
+        if arg.chars().any(char::is_control) {
+            return Err(BridgeError::validation(
+                "An agent argument contains an unsupported control character.",
+            ));
+        }
+    }
 
     let is_wt = kind == TerminalKind::WindowsTerminal;
 
     let args: Vec<String> = if is_wt {
         // `wt -d <dir> -- <exe>` opens a new tab in the project directory and
         // runs the agent there. Each element is a separate argv entry.
-        vec![
+        let mut args = vec![
             "-d".to_string(),
             workdir_str.clone(),
             "--".to_string(),
             exe_str.clone(),
-        ]
+        ];
+        args.extend(agent_args.iter().cloned());
+        args
     } else {
         // PowerShell fallback. `-NoExit` keeps the window open after the agent
         // exits so the user can read output. The command is a single argv
@@ -134,10 +181,15 @@ pub fn build_launch_plan_for(
         // The path is passed via the `-LiteralPath`/`Set-Location` cmdlet rather
         // than string concatenation into a command pipeline, and the executable
         // is invoked with the call operator on a single-quoted literal.
+        let quoted_args = agent_args
+            .iter()
+            .map(|arg| format!(" {}", ps_single_quote(arg)))
+            .collect::<String>();
         let script = format!(
-            "Set-Location -LiteralPath {}; & {}",
+            "Set-Location -LiteralPath {}; & {}{}",
             ps_single_quote(&workdir_str),
-            ps_single_quote(&exe_str)
+            ps_single_quote(&exe_str),
+            quoted_args
         );
         vec![
             "-NoExit".to_string(),
@@ -148,9 +200,19 @@ pub fn build_launch_plan_for(
     };
 
     let display = if is_wt {
-        format!("wt -d \"{workdir_str}\" -- \"{exe_str}\"")
+        let suffix = if agent_args.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", agent_args.join(" "))
+        };
+        format!("wt -d \"{workdir_str}\" -- \"{exe_str}\"{suffix}")
     } else {
-        format!("Set-Location -LiteralPath \"{workdir_str}\"; & \"{exe_str}\"")
+        let suffix = if agent_args.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", agent_args.join(" "))
+        };
+        format!("Set-Location -LiteralPath \"{workdir_str}\"; & \"{exe_str}\"{suffix}")
     };
 
     Ok(LaunchPlan {
