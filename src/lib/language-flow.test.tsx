@@ -33,6 +33,7 @@ function freshSettings(overrides: Partial<SettingsView> = {}): SettingsView {
     insecureEndpointNoticeSeen: false,
     language: "en",
     ompProfile: "default",
+    agentLocations: {},
     appVersion: "0.1.0",
     dataDirectory: "C:\\data",
     logDirectory: "C:\\data\\logs",

@@ -30,6 +30,7 @@ import { ApiError, call, type AgentId, type AgentSummary } from "../lib/api";
 import { relativeTime } from "../lib/format";
 import { compatibilityLabel } from "../lib/compatibility";
 import type { MessageKey } from "../lib/i18n";
+import { locationProblemKey } from "../lib/locations";
 import { openUrl, pickFolder } from "../lib/opener";
 import { useAction, useApp } from "../state/AppContext";
 
@@ -173,8 +174,20 @@ function AgentCard({
         </Banner>
       )}
 
-      {/* `agent.note` is the backend's own sentence, so it is shown as sent. */}
-      {agent.note && <Banner tone="warn">{agent.note}</Banner>}
+      {/* `agent.note` is the backend's own sentence, so it is shown as sent.
+          A saved-location problem is rendered from its machine code instead, so
+          the explanation is translated like the rest of the screen. */}
+      {agent.note && !agent.locationProblem && <Banner tone="warn">{agent.note}</Banner>}
+
+      {agent.locationProblem && (
+        <Banner tone="warn" title={t("home.locationProblemTitle", { agent: agent.displayName })}>
+          {t(locationProblemKey(agent.locationProblem), {
+            agent: agent.displayName,
+            path: agent.locationDetail ?? agent.configuredLocation ?? "",
+          })}{" "}
+          {t("settings.locationProblemHint")}
+        </Banner>
+      )}
 
       <Meta
         items={[

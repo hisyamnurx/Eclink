@@ -50,6 +50,35 @@ export type ConfigParseState = "missing" | "valid" | "invalid";
 export type ActiveKind = "default" | "managed" | "external";
 export type AuthMode = "bearer" | "x_api_key";
 
+/** A saved install location is either a folder or the launcher file itself. */
+export type LocationKind = "folder" | "launcher";
+
+/** Where the effective launcher came from. */
+export type LocationMode = "automatic" | "folder" | "launcher";
+
+/** Why a saved install location produced no usable launcher. */
+export type LocationProblem =
+  "missing" | "not_a_launcher" | "unusable" | "timeout" | "unsupported_path";
+
+export interface AgentLocation {
+  /** Absolute Windows path, as the user chose it. */
+  path: string;
+  kind: LocationKind;
+}
+
+/** Saved locations by agent. An absent entry means automatic detection. */
+export interface AgentLocations {
+  codex?: AgentLocation;
+  claude?: AgentLocation;
+  omp?: AgentLocation;
+}
+
+/** A location being saved from this screen. */
+export interface AgentLocationInput {
+  path: string;
+  kind: LocationKind;
+}
+
 export type CompatibilityStatus =
   | "untested"
   | "testing"
@@ -73,6 +102,18 @@ export interface AgentSummary {
   activeKind: ActiveKind;
   activeProfileName?: string;
   configWritable: boolean;
+  locationMode?: LocationMode;
+  configuredLocation?: string;
+  locationProblem?: LocationProblem;
+  locationDetail?: string;
+}
+
+/** The result of saving or clearing one agent's install location. */
+export interface AgentLocationResult {
+  /** That agent, re-detected against the new setting. */
+  agent: AgentSummary;
+  /** Every agent's saved location, so this screen can redraw. */
+  agentLocations: AgentLocations;
 }
 
 export interface HeaderPair {
@@ -302,6 +343,8 @@ export interface AppSettings {
   language: string;
   /** OMP named profile Eclink manages. `default` is the default profile. */
   ompProfile: string;
+  /** Per-agent install locations. Absent entries mean automatic detection. */
+  agentLocations: AgentLocations;
 }
 
 export interface SettingsView extends AppSettings {
@@ -414,6 +457,16 @@ export interface PlaygroundResult {
 export interface Commands {
   list_agents: { args: Record<string, never>; result: AgentSummary[] };
   refresh_agent: { args: { agent: AgentId }; result: AgentSummary };
+  /**
+   * Save or clear one agent's install location.
+   *
+   * `location: null` restores automatic detection. The backend re-detects the
+   * changed agent, so the returned summary is what it just observed.
+   */
+  set_agent_location: {
+    args: { agent: AgentId; location: AgentLocationInput | null };
+    result: AgentLocationResult;
+  };
   get_diagnostics: { args: Record<string, never>; result: AgentDiagnostics[] };
 
   list_profiles: { args: Record<string, never>; result: ProfileSummary[] };

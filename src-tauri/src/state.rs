@@ -8,7 +8,12 @@ use crate::error::{BridgeError, BridgeResult};
 use crate::paths::AppPaths;
 
 /// Current `app.json` schema version.
-pub const APP_SETTINGS_SCHEMA_VERSION: u32 = 1;
+///
+/// 2 added `agentLocations`. The field is optional and defaults to "automatic
+/// detection for every agent", so the bump records the change without requiring
+/// a transformation: a version-1 file loads unchanged and simply has no saved
+/// locations.
+pub const APP_SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 /// Load `app.json`, migrating older or partial files.
 ///
@@ -128,6 +133,15 @@ fn settings_from_lenient(raw: &str, error: &str) -> AppSettings {
                     settings.log_level = level;
                 }
             }
+            "agentLocations" => {
+                // Parsed as a unit: a half-readable location map is not worth
+                // trusting, and dropping it only means automatic detection.
+                if let Ok(locations) =
+                    serde_json::from_value::<crate::adapters::AgentLocations>(value.clone())
+                {
+                    settings.agent_locations = locations;
+                }
+            }
             _ => {}
         }
     }
@@ -203,6 +217,110 @@ mod tests {
             settings.remember_project_directory,
             "missing field must default"
         );
+    }
+
+    #[test]
+    fn a_settings_file_without_locations_reads_as_automatic() {
+        // The migration path for every installation that upgrades: the file has
+        // no `agentLocations`, so every agent keeps automatic detection.
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AppPaths::with_root(dir.path());
+        std::fs::write(
+            paths.app_json(),
+            br#"{"schemaVersion":1,"updateCheck":true,"language":"id"}"#,
+        )
+        .unwrap();
+
+        let settings = load_settings(&paths).unwrap();
+
+        assert!(settings.agent_locations.is_empty());
+        assert_eq!(settings.language, "id", "other settings still load");
+        assert_eq!(settings.schema_version, APP_SETTINGS_SCHEMA_VERSION);
+    }
+
+    #[test]
+    fn saved_locations_survive_a_save_and_reload_per_agent() {
+        use crate::adapters::{AgentId, AgentLocation, LocationKind};
+
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AppPaths::with_root(dir.path());
+        let mut settings = load_settings(&paths).unwrap();
+        settings.agent_locations.set(
+            AgentId::Codex,
+            Some(AgentLocation::new(r"D:\Tools\codex", LocationKind::Folder)),
+        );
+        settings.agent_locations.set(
+            AgentId::Omp,
+            Some(AgentLocation::new(
+                r"D:\Tools\omp\omp.exe",
+                LocationKind::Launcher,
+            )),
+        );
+        save_settings(&paths, &settings).unwrap();
+
+        let reloaded = load_settings(&paths).unwrap();
+
+        assert_eq!(
+            reloaded.agent_locations.codex,
+            settings.agent_locations.codex
+        );
+        assert_eq!(reloaded.agent_locations.omp, settings.agent_locations.omp);
+        assert!(
+            reloaded.agent_locations.claude.is_none(),
+            "an agent that was never configured stays automatic"
+        );
+
+        // Clearing one agent must not disturb the others.
+        let mut cleared = reloaded.clone();
+        cleared.agent_locations.set(AgentId::Codex, None);
+        save_settings(&paths, &cleared).unwrap();
+        let after = load_settings(&paths).unwrap();
+        assert!(after.agent_locations.codex.is_none());
+        assert!(after.agent_locations.omp.is_some());
+    }
+
+    #[test]
+    fn a_malformed_unrelated_field_does_not_discard_saved_locations() {
+        // `#[serde(default)]` only covers absent keys. A wrong-typed value sends
+        // the loader down the lenient path, which must still recover locations.
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AppPaths::with_root(dir.path());
+        std::fs::write(
+            paths.app_json(),
+            br#"{
+              "schemaVersion": 2,
+              "updateCheck": "not a boolean",
+              "agentLocations": {
+                "claude": { "path": "D:\\Tools\\Claude O'Brien", "kind": "folder" }
+              }
+            }"#,
+        )
+        .unwrap();
+
+        let settings = load_settings(&paths).unwrap();
+
+        let claude = settings
+            .agent_locations
+            .claude
+            .as_ref()
+            .expect("the saved location is still readable");
+        assert_eq!(claude.path, r"D:\Tools\Claude O'Brien");
+        assert!(
+            settings.update_check,
+            "the bad field falls back to its default"
+        );
+    }
+
+    #[test]
+    fn app_json_always_carries_the_agent_location_map() {
+        // The settings view flattens `AppSettings`, so an omitted field would
+        // arrive at the interface as `undefined` rather than an empty map.
+        let dir = tempfile::tempdir().unwrap();
+        let paths = AppPaths::with_root(dir.path());
+        save_settings(&paths, &AppSettings::default()).unwrap();
+
+        let raw = std::fs::read_to_string(paths.app_json()).unwrap();
+        assert!(raw.contains("\"agentLocations\": {}"), "{raw}");
     }
 
     #[test]

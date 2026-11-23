@@ -20,6 +20,7 @@ import {
 import {
   call,
   toApiError,
+  type AgentLocationInput,
   type AgentSummary,
   type AppSettings,
   type ProfileSummary,
@@ -70,6 +71,14 @@ interface AppContextValue {
   reloadAgents: () => Promise<void>;
   reloadProfiles: () => Promise<void>;
   refreshAgent: (agent: string) => Promise<void>;
+  /**
+   * Save or clear one agent's install location.
+   *
+   * `null` restores automatic detection. The backend re-detects that agent and
+   * returns the fresh summary plus the saved locations; both are applied here so
+   * the Overview card and this screen update without a reload.
+   */
+  setAgentLocation: (agent: string, location: AgentLocationInput | null) => Promise<void>;
   saveSettings: (patch: Partial<AppSettings>) => Promise<void>;
   /* toasts */
   toasts: Toast[];
@@ -176,6 +185,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  /**
+   * Save or clear one agent's install location.
+   *
+   * Only that agent is re-detected; the other two keep their current status, so a
+   * broken location for one agent cannot blank another's card.
+   */
+  const setAgentLocation = useCallback(
+    async (agent: string, location: AgentLocationInput | null) => {
+      const result = await call("set_agent_location", {
+        agent: agent as "codex" | "claude" | "omp",
+        location,
+      });
+      setAgents((current) => {
+        const exists = current.some((item) => item.agent === result.agent.agent);
+        // Normally the agent is already listed. If the initial list failed, adding
+        // the fresh summary is better than silently dropping it.
+        return exists
+          ? current.map((item) => (item.agent === result.agent.agent ? result.agent : item))
+          : [...current, result.agent];
+      });
+      setSettings((current) =>
+        current ? { ...current, agentLocations: result.agentLocations } : current,
+      );
+    },
+    [],
+  );
+
   const saveSettings = useCallback(async (patch: Partial<AppSettings>) => {
     // Send only the fields the backend accepts, but send ALL of them. The patch is
     // built field by field rather than passed through, so a field that is not listed
@@ -272,6 +308,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       reloadAgents,
       reloadProfiles,
       refreshAgent,
+      setAgentLocation,
       saveSettings,
       language,
       t,
@@ -292,6 +329,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       reloadAgents,
       reloadProfiles,
       refreshAgent,
+      setAgentLocation,
       saveSettings,
       language,
       t,

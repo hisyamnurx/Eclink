@@ -452,6 +452,36 @@ const en = {
   "settings.independence":
     "Eclink is an independent open-source project and is not affiliated with, endorsed by, or sponsored by OpenAI or Anthropic.",
 
+  "settings.locations": "Agent install locations",
+  "settings.locationsBody":
+    "Eclink normally finds each agent on PATH. Set a folder or a launcher file when an agent was installed somewhere else. This changes detection and opening only: configuration is not moved, profiles are not switched, and PATH is not modified.",
+  "settings.locationSource": "Source",
+  "settings.locationEffective": "Effective location",
+  "settings.locationConfigured": "Saved path",
+  "settings.locationAutomatic": "Automatic detection",
+  "settings.locationFolder": "Installation folder",
+  "settings.locationLauncher": "Launcher file",
+  "settings.locationNotDetected": "Not detected",
+  "settings.locationPathLabel": "Folder or launcher file",
+  "settings.locationPathHint":
+    "Paste an absolute path, or use a button below. A path ending in .exe, .cmd, .bat, or .com is treated as a launcher file; anything else is treated as a folder.",
+  "settings.locationChooseFolder": "Choose folder...",
+  "settings.locationChooseLauncher": "Choose launcher...",
+  "settings.locationSave": "Use this path",
+  "settings.locationReset": "Use automatic detection",
+  "settings.locationSaved": "{agent} install location saved.",
+  "settings.locationResetDone": "{agent} is back to automatic detection.",
+  "settings.locationPickerFolder": "Choose the {agent} installation folder",
+  "settings.locationPickerLauncher": "Choose the {agent} launcher",
+  "settings.locationProblemMissing": "The saved location {path} no longer exists.",
+  "settings.locationProblemNotLauncher": "No supported {agent} launcher was found in {path}.",
+  "settings.locationProblemUnusable": "The launcher at {path} could not be run.",
+  "settings.locationProblemTimeout": "The launcher at {path} did not respond in time.",
+  "settings.locationProblemUnsupported": "The saved location cannot be used: {path}.",
+  "settings.locationProblemHint":
+    "Choose the right file or folder, or switch this agent back to automatic detection.",
+  "home.locationProblemTitle": "{agent} install location needs attention",
+
   "toast.providerUpdated": "Provider updated.",
   "toast.providerAdded": "Provider added.",
   "toast.keySaved": "The API key was saved securely.",
@@ -955,6 +985,37 @@ const id: Dictionary = {
   "settings.diagnostics": "Diagnostik",
   "settings.independence":
     "Eclink adalah proyek open-source independen dan tidak berafiliasi dengan, tidak didukung oleh, dan tidak disponsori oleh OpenAI atau Anthropic.",
+
+  "settings.locations": "Lokasi instalasi agen",
+  "settings.locationsBody":
+    "Eclink biasanya menemukan tiap agen lewat PATH. Atur folder atau file launcher kalau agen dipasang di tempat lain. Ini hanya mengubah deteksi dan cara membuka agen: konfigurasi tidak dipindahkan, profil tidak diganti, dan PATH tidak diubah.",
+  "settings.locationSource": "Sumber",
+  "settings.locationEffective": "Lokasi efektif",
+  "settings.locationConfigured": "Path tersimpan",
+  "settings.locationAutomatic": "Deteksi otomatis",
+  "settings.locationFolder": "Folder instalasi",
+  "settings.locationLauncher": "File launcher",
+  "settings.locationNotDetected": "Tidak terdeteksi",
+  "settings.locationPathLabel": "Folder atau file launcher",
+  "settings.locationPathHint":
+    "Tempel path absolut, atau pakai tombol di bawah. Path berakhiran .exe, .cmd, .bat, atau .com dianggap file launcher; selain itu dianggap folder.",
+  "settings.locationChooseFolder": "Pilih folder...",
+  "settings.locationChooseLauncher": "Pilih launcher...",
+  "settings.locationSave": "Pakai path ini",
+  "settings.locationReset": "Pakai deteksi otomatis",
+  "settings.locationSaved": "Lokasi instalasi {agent} disimpan.",
+  "settings.locationResetDone": "{agent} kembali ke deteksi otomatis.",
+  "settings.locationPickerFolder": "Pilih folder instalasi {agent}",
+  "settings.locationPickerLauncher": "Pilih launcher {agent}",
+  "settings.locationProblemMissing": "Lokasi tersimpan {path} sudah tidak ada.",
+  "settings.locationProblemNotLauncher":
+    "Launcher {agent} yang didukung tidak ditemukan di {path}.",
+  "settings.locationProblemUnusable": "Launcher di {path} tidak bisa dijalankan.",
+  "settings.locationProblemTimeout": "Launcher di {path} tidak merespons tepat waktu.",
+  "settings.locationProblemUnsupported": "Lokasi tersimpan tidak bisa dipakai: {path}.",
+  "settings.locationProblemHint":
+    "Pilih file atau folder yang benar, atau kembalikan agen ini ke deteksi otomatis.",
+  "home.locationProblemTitle": "Lokasi instalasi {agent} perlu diperbaiki",
 
   "toast.providerUpdated": "Provider diperbarui.",
   "toast.providerAdded": "Provider ditambahkan.",

@@ -28,7 +28,10 @@ use std::sync::{Arc, RwLock};
 use serde::{Deserialize, Serialize};
 use yaml_edit::Document;
 
-use crate::adapters::detect::{clean_version, version_at_least};
+use crate::adapters::detect::{
+    clean_version, probe_launcher_with_env, version_at_least, ProbeError,
+};
+use crate::adapters::locate::{self, Launcher, LocationStore};
 use crate::adapters::{
     ActiveConfiguration, AgentAdapter, AgentDetection, AgentDiagnostics, ApplyOptions,
     ApplyOutcome, ConfigParseState, ConfigSnapshot, LaunchPlan, MutationReason,
@@ -368,14 +371,27 @@ pub struct OmpAdapter {
     backups: BackupManager,
     ledger_path: PathBuf,
     selection: OmpSelection,
+    /// Per-agent install location, shared with `AppState`.
+    locations: LocationStore,
 }
 
 impl OmpAdapter {
     pub fn new(backups: BackupManager, ledger_path: PathBuf, selection: OmpSelection) -> Self {
+        Self::with_locations(backups, ledger_path, selection, LocationStore::default())
+    }
+
+    /// Build an adapter that honours a saved install location.
+    pub fn with_locations(
+        backups: BackupManager,
+        ledger_path: PathBuf,
+        selection: OmpSelection,
+        locations: LocationStore,
+    ) -> Self {
         Self {
             backups,
             ledger_path,
             selection,
+            locations,
         }
     }
 
@@ -809,10 +825,12 @@ impl OmpAdapter {
         })
     }
 
-    fn find_omp() -> Option<PathBuf> {
-        // Prefer PATH: it is the installation the user's own shell and agent
-        // launcher will use. Known install locations are fallbacks for a GUI
-        // process that inherited a PATH without the Bun or installer entry.
+    /// The lookup order used when automatic detection applies.
+    ///
+    /// Unchanged on purpose: PATH first (the installation the user's own shell and
+    /// agent launcher use), then the known Bun and installer locations, which cover a
+    /// GUI process that inherited a PATH without the Bun entry.
+    fn automatic_launcher() -> Option<PathBuf> {
         let output = Command::new("where.exe")
             .arg("omp.exe")
             .stdin(Stdio::null())
@@ -843,68 +861,91 @@ impl OmpAdapter {
         candidates.into_iter().find(|path| path.is_file())
     }
 
-    fn version_of(executable: &Path) -> Result<String, BridgeError> {
-        let output = Command::new(executable)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags_no_window()
-            .output()
-            .map_err(|err| {
-                BridgeError::new(
-                    ErrorKind::AgentUnavailable,
-                    "Eclink could not run Oh My Pi.",
-                )
-                .with_details(err.to_string())
-            })?;
-        if !output.status.success() {
-            return Err(BridgeError::new(
-                ErrorKind::AgentUnavailable,
-                "Oh My Pi did not report its version.",
-            ));
+    /// Resolve the launcher this adapter would run, honouring a saved location.
+    fn resolve_launcher(&self) -> locate::Resolution {
+        self.locations
+            .resolve(AgentId::Omp, Self::automatic_launcher)
+    }
+
+    /// The launcher for Launch, naming a saved location's problem when there is
+    /// one instead of claiming Oh My Pi is not installed.
+    fn launcher_for_launch(&self) -> Result<Launcher, BridgeError> {
+        let resolution = self.resolve_launcher();
+        if let Some(launcher) = resolution.launcher.clone() {
+            return Ok(launcher);
         }
-        let version = clean_version(&String::from_utf8_lossy(&output.stdout));
-        if crate::adapters::detect::parse_version(&version).is_none() {
-            return Err(BridgeError::new(
+        Err(match resolution.problem {
+            // `describe` already tells the user what to do, so no second hint.
+            Some(problem) => BridgeError::new(
                 ErrorKind::AgentUnavailable,
-                "Oh My Pi returned an unreadable version.",
-            ));
+                problem.describe(AgentId::Omp, &resolution.detail.clone().unwrap_or_default()),
+            ),
+            None => BridgeError::new(ErrorKind::AgentUnavailable, "Oh My Pi is not installed.")
+                .with_hint("Install Oh My Pi, or set its install location in Settings."),
+        })
+    }
+
+    /// The launcher for a probe that can be skipped when OMP is absent.
+    ///
+    /// A saved location that is broken is an error, not an absence: Eclink must
+    /// not silently validate against a different OMP installation from PATH.
+    fn optional_launcher(&self) -> Result<Option<Launcher>, BridgeError> {
+        let resolution = self.resolve_launcher();
+        if let Some(launcher) = resolution.launcher.clone() {
+            return Ok(Some(launcher));
+        }
+        match resolution.problem {
+            Some(problem) => Err(BridgeError::new(
+                ErrorKind::AgentUnavailable,
+                problem.describe(AgentId::Omp, &resolution.detail.clone().unwrap_or_default()),
+            )),
+            None => Ok(None),
+        }
+    }
+
+    fn version_of(launcher: &Launcher) -> Result<String, ProbeError> {
+        let stdout =
+            tauri::async_runtime::block_on(probe_launcher_with_env(launcher, &["--version"], &[]))?;
+        let version = clean_version(&stdout);
+        if crate::adapters::detect::parse_version(&version).is_none() {
+            return Err(ProbeError::Unreadable(format!(
+                "Oh My Pi printed \"{version}\", which is not a version."
+            )));
         }
         Ok(version)
     }
 
     /// Verify the provider and selector through OMP's own registry.
     fn verify_registry(&self, provider_id: &str, model: &str) -> Result<(), BridgeError> {
-        let Some(executable) = Self::find_omp() else {
+        // The same resolver detection and Launch use, so a saved location is the
+        // one validated and there is no separate PATH lookup to drift from it.
+        let Some(launcher) = self.optional_launcher()? else {
             return Ok(());
         };
         let paths = self.paths()?;
         // Point OMP at the exact agent directory being edited. This works for
         // both the default and a named profile and avoids combining --profile
         // with an already-resolved directory.
-        let output = Command::new(&executable)
-            .args(["models", "--json"])
-            .env("PI_CODING_AGENT_DIR", &paths.config_dir)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .creation_flags_no_window()
-            .output()
-            .map_err(|err| {
-                BridgeError::new(
-                    ErrorKind::AgentUnavailable,
-                    "Eclink could not ask Oh My Pi to validate the new provider.",
-                )
-                .with_details(err.to_string())
-            })?;
-        if !output.status.success() {
-            return Err(BridgeError::new(
+        let env = [(
+            "PI_CODING_AGENT_DIR".to_string(),
+            paths.config_dir.display().to_string(),
+        )];
+        let stdout = tauri::async_runtime::block_on(probe_launcher_with_env(
+            &launcher,
+            &["models", "--json"],
+            &env,
+        ))
+        .map_err(|err| match err {
+            ProbeError::Failed(detail) => BridgeError::new(
                 ErrorKind::ConfigInvalid,
                 "Oh My Pi rejected the updated model configuration.",
             )
             .with_hint("Restore the original configuration and check the YAML by hand.")
-            .with_details(String::from_utf8_lossy(&output.stderr).to_string()));
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
+            .with_details(detail),
+            other => probe_error("Oh My Pi", &other).with_hint(
+                "Eclink rolled the change back. Check the Oh My Pi install location in Settings.",
+            ),
+        })?;
         let listed = serde_json::from_str::<OmpModelsList>(&stdout).map_err(|err| {
             BridgeError::new(
                 ErrorKind::ConfigInvalid,
@@ -1175,6 +1216,24 @@ impl CommandNoWindow for Command {
     }
 }
 
+/// Map a failed probe onto the error the user sees.
+///
+/// A timeout is kept distinguishable from a failure so the message can say the
+/// process was stopped rather than that the agent is missing.
+fn probe_error(agent: &str, error: &ProbeError) -> BridgeError {
+    let mut bridge = BridgeError::new(ErrorKind::AgentUnavailable, error.message(agent));
+    if let Some(detail) = error.detail() {
+        bridge = bridge.with_details(detail);
+    }
+    if *error == ProbeError::TimedOut {
+        bridge = bridge.with_hint(
+            "The agent stopped responding and was stopped. Try again, or check its install \
+             location in Settings.",
+        );
+    }
+    bridge
+}
+
 impl AgentAdapter for OmpAdapter {
     fn id(&self) -> AgentId {
         AgentId::Omp
@@ -1182,21 +1241,46 @@ impl AgentAdapter for OmpAdapter {
 
     fn detect(&self) -> Result<AgentDetection, BridgeError> {
         let paths = self.paths()?;
-        let executable = Self::find_omp();
-        let version = executable
-            .as_deref()
-            .and_then(|path| Self::version_of(path).ok());
-        let mut note = None;
-        if let Some(version) = version.as_deref() {
-            if !version_at_least(version, MIN_OMP_VERSION) {
-                note = Some(format!(
-                    "Oh My Pi {version} is older than the tested {MIN_OMP_VERSION_LABEL}. Update OMP before activating."
-                ));
+        let resolution = self.resolve_launcher();
+        let Some(launcher) = resolution.launcher.clone() else {
+            let mut detection =
+                AgentDetection::not_installed(AgentId::Omp, "https://github.com/can1357/oh-my-pi");
+            locate::apply_resolution(&mut detection, &resolution, None);
+            return Ok(detection);
+        };
+
+        let probe = Self::version_of(&launcher);
+        let version = probe.as_ref().ok().cloned();
+
+        let mut detection = AgentDetection {
+            agent: AgentId::Omp,
+            display_name: AgentId::Omp.display_name().to_string(),
+            installed: true,
+            executable: Some(launcher.path().display().to_string()),
+            version: version.clone(),
+            config_path: Some(paths.models_path.display().to_string()),
+            config_dir: Some(paths.config_dir.display().to_string()),
+            config_dir_from_env: paths.from_env,
+            note: None,
+            install_guide_url: Some("https://github.com/can1357/oh-my-pi".to_string()),
+            location_mode: None,
+            configured_location: None,
+            location_problem: None,
+            location_detail: None,
+        };
+
+        let installed = locate::apply_resolution(&mut detection, &resolution, probe.as_ref().err());
+
+        if installed {
+            if let Some(version) = version.as_deref() {
+                if !version_at_least(version, MIN_OMP_VERSION) {
+                    detection.note = Some(format!(
+                        "Oh My Pi {version} is older than the tested {MIN_OMP_VERSION_LABEL}. Update OMP before activating."
+                    ));
+                }
             }
-        }
-        if let Some(executable) = executable.as_deref() {
             if !paths.config_dir.exists() {
-                note = Some(match note {
+                detection.note = Some(match detection.note {
                     Some(existing) => format!(
                         "{existing} The config directory will be created at {}.",
                         paths.config_dir.display()
@@ -1207,20 +1291,9 @@ impl AgentAdapter for OmpAdapter {
                     ),
                 });
             }
-            let _ = executable;
         }
-        Ok(AgentDetection {
-            agent: AgentId::Omp,
-            display_name: AgentId::Omp.display_name().to_string(),
-            installed: executable.is_some(),
-            executable: executable.map(|path| path.display().to_string()),
-            version,
-            config_path: Some(paths.models_path.display().to_string()),
-            config_dir: Some(paths.config_dir.display().to_string()),
-            config_dir_from_env: paths.from_env,
-            note,
-            install_guide_url: Some("https://github.com/can1357/oh-my-pi".to_string()),
-        })
+        detection.installed = installed;
+        Ok(detection)
     }
 
     fn locate_config(&self) -> Result<PathBuf, BridgeError> {
@@ -1614,11 +1687,9 @@ impl AgentAdapter for OmpAdapter {
     }
 
     fn launch_argv(&self, project_dir: &Path) -> Result<LaunchPlan, BridgeError> {
-        let detection = self.detect()?;
-        let executable = detection.executable.ok_or_else(|| {
-            BridgeError::new(ErrorKind::AgentUnavailable, "Oh My Pi is not installed.")
-                .with_hint("Install Oh My Pi, then press Refresh.")
-        })?;
+        // The same resolver as detection and registry validation, so the file
+        // that is launched is the one Eclink reported and validated.
+        let launcher = self.launcher_for_launch()?;
         let paths = self.paths()?;
         let mut extra = Vec::new();
         if paths.profile != DEFAULT_PROFILE {
@@ -1635,7 +1706,7 @@ impl AgentAdapter for OmpAdapter {
         }
         crate::process::build_launch_plan_with_args(
             AgentId::Omp,
-            Path::new(&executable),
+            launcher.path(),
             project_dir,
             &extra,
         )
@@ -1870,5 +1941,71 @@ mod tests {
         assert!(validate_omp_selector("router/model:thinking").is_ok());
         assert!(validate_omp_selector("provider").is_err());
         assert!(validate_omp_selector("/model").is_err());
+    }
+
+    fn adapter_with_location(root: &Path, path: &Path) -> OmpAdapter {
+        let mut locations = locate::AgentLocations::default();
+        locations.set(
+            AgentId::Omp,
+            Some(locate::AgentLocation::new(
+                path.display().to_string(),
+                locate::LocationKind::Launcher,
+            )),
+        );
+        OmpAdapter::with_locations(
+            BackupManager::new(root.join("backups")),
+            root.join("ledger.json"),
+            OmpSelection::new("default"),
+            LocationStore::new(locations),
+        )
+    }
+
+    #[test]
+    fn registry_validation_runs_the_saved_omp_launcher() {
+        // The point of the shared resolver: `omp models --json` must ask the OMP
+        // the user chose, not whatever PATH happens to hold. The shim records its
+        // argv, so a fallback to a different installation cannot pass silently.
+        let dir = tempfile::tempdir().unwrap();
+        let marker = dir.path().join("argv.txt");
+        let shim = dir.path().join("OMP tools O'Brien").join("omp.cmd");
+        std::fs::create_dir_all(shim.parent().unwrap()).unwrap();
+        std::fs::write(
+            &shim,
+            format!(
+                "@echo off\r\necho %* > \"{}\"\r\necho {{\"models\":[{{\"provider\":\"p\",\"id\":\"m\"}}]}}\r\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+
+        let adapter = adapter_with_location(dir.path(), &shim);
+        adapter.verify_registry("p", "m").unwrap();
+
+        let logged = std::fs::read_to_string(&marker).unwrap();
+        assert!(logged.contains("models"), "argv was: {logged}");
+        assert!(logged.contains("--json"), "argv was: {logged}");
+    }
+
+    #[test]
+    fn registry_validation_refuses_a_broken_saved_location() {
+        // A saved location that no longer exists is an error, not a reason to
+        // validate the other installation Eclink might find on PATH.
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("gone").join("omp.exe");
+        let adapter = adapter_with_location(dir.path(), &missing);
+
+        let error = adapter.verify_registry("p", "m").unwrap_err();
+
+        assert_eq!(error.kind, ErrorKind::AgentUnavailable);
+        assert!(
+            error.message.contains("no longer exists"),
+            "message was: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("Settings"),
+            "the message must point at the fix: {}",
+            error.message
+        );
     }
 }

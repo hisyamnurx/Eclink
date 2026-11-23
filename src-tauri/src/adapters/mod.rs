@@ -13,6 +13,7 @@
 pub mod claude;
 pub mod codex;
 pub mod detect;
+pub mod locate;
 pub mod omp;
 
 use std::path::{Path, PathBuf};
@@ -27,6 +28,10 @@ use crate::error::BridgeResult;
 pub use crate::profiles::{AgentId, CompatibilityStatus, Profile};
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
+pub use locate::{
+    AgentLocation, AgentLocations, Launcher, LocationKind, LocationMode, LocationProblem,
+    LocationStore, Resolution,
+};
 pub use omp::{OmpAdapter, OmpPreview, OmpProfileSummary, OmpSelection};
 
 /// Directory name under `%LOCALAPPDATA%` for all Eclink data.
@@ -60,6 +65,18 @@ pub struct AgentDetection {
     /// Official installation guide, offered only as a link (PRD §33).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub install_guide_url: Option<String>,
+    /// Whether the launcher came from automatic detection or a saved location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_mode: Option<LocationMode>,
+    /// The saved location, when the user set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_location: Option<String>,
+    /// Why the saved location produced no usable launcher, when it did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_problem: Option<LocationProblem>,
+    /// A path or agent-specific hint that explains `location_problem`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_detail: Option<String>,
 }
 
 impl AgentDetection {
@@ -76,6 +93,10 @@ impl AgentDetection {
             config_dir_from_env: false,
             note: None,
             install_guide_url: Some(guide.to_string()),
+            location_mode: Some(LocationMode::Automatic),
+            configured_location: None,
+            location_problem: None,
+            location_detail: None,
         }
     }
 }

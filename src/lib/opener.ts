@@ -49,13 +49,23 @@ export async function revealPath(path: string): Promise<void> {
 
 /** Show a native folder picker; resolves to null when cancelled. */
 export async function pickFolder(defaultPath?: string): Promise<string | null> {
+  return pickDirectory("Choose a project folder", defaultPath);
+}
+
+/**
+ * Folder picker with a caller-supplied title.
+ *
+ * The title is passed in rather than built here so the Settings screen can show
+ * it in the interface language; this module has no dictionary of its own.
+ */
+export async function pickDirectory(title: string, defaultPath?: string): Promise<string | null> {
   try {
     const { open } = await import("@tauri-apps/plugin-dialog");
     const selected = await open({
       directory: true,
       multiple: false,
       defaultPath: defaultPath || undefined,
-      title: "Choose a project folder",
+      title,
     });
     if (typeof selected === "string") return selected;
     return null;
@@ -63,6 +73,37 @@ export async function pickFolder(defaultPath?: string): Promise<string | null> {
     throw new ApiError({
       kind: "internal",
       message: "Could not open the folder picker.",
+      details: String(error),
+    });
+  }
+}
+
+/**
+ * Pick a launcher file, for layouts where the executable is not in the folder
+ * itself or its `bin` subfolder.
+ *
+ * The filter is a convenience, not a security boundary: the backend validates
+ * the extension and refuses anything it cannot execute safely.
+ */
+export async function pickLauncherFile(
+  title: string,
+  defaultPath?: string,
+): Promise<string | null> {
+  try {
+    const { open } = await import("@tauri-apps/plugin-dialog");
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      defaultPath: defaultPath || undefined,
+      title,
+      filters: [{ name: "Launchers", extensions: ["exe", "cmd", "bat", "com"] }],
+    });
+    if (typeof selected === "string") return selected;
+    return null;
+  } catch (error) {
+    throw new ApiError({
+      kind: "internal",
+      message: "Could not open the file picker.",
       details: String(error),
     });
   }

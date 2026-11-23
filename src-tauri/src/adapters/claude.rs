@@ -44,6 +44,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 
 use crate::adapters::detect;
+use crate::adapters::locate::{self, Launcher, LocationStore};
 use crate::adapters::{
     ActiveConfiguration, AgentAdapter, AgentDetection, AgentDiagnostics, ApplyOptions,
     ApplyOutcome, ConfigParseState, ConfigSnapshot, LaunchPlan,
@@ -371,13 +372,72 @@ fn evaluate_managed_policy(raw: &str, path: &Path) -> BridgeResult<()> {
 }
 
 /// The Claude Code agent adapter.
+#[derive(Clone)]
 pub struct ClaudeAdapter {
     backups: BackupManager,
+    /// Per-agent install location, shared with `AppState`.
+    locations: LocationStore,
 }
 
 impl ClaudeAdapter {
     pub fn new(backups: BackupManager) -> Self {
-        Self { backups }
+        Self::with_locations(backups, LocationStore::default())
+    }
+
+    /// Build an adapter that honours saved install locations.
+    pub fn with_locations(backups: BackupManager, locations: LocationStore) -> Self {
+        Self { backups, locations }
+    }
+
+    /// The lookup order used when automatic detection applies.
+    ///
+    /// Unchanged on purpose: an installation that worked before this feature must
+    /// resolve to exactly the same executable afterwards.
+    fn automatic_launcher() -> Option<PathBuf> {
+        let which = tauri::async_runtime::block_on(detect::which("claude"));
+        if let Some(found) = which.first() {
+            return Some(found.clone());
+        }
+        let home = crate::paths::home_dir().ok()?;
+        let candidates = detect::known_locations(
+            &home,
+            locate::CLAUDE_LAUNCHER_NAMES,
+            &[
+                ".claude\\local",
+                ".local\\bin",
+                "AppData\\Local\\Programs\\claude",
+            ],
+        );
+        detect::first_existing(&candidates)
+    }
+
+    fn resolve_launcher(&self) -> locate::Resolution {
+        self.locations
+            .resolve(AgentId::Claude, Self::automatic_launcher)
+    }
+
+    /// The launcher for Launch, with a message that names the saved location's
+    /// problem instead of claiming Claude Code is not installed.
+    fn launcher_for_launch(&self) -> BridgeResult<Launcher> {
+        let resolution = self.resolve_launcher();
+        if let Some(launcher) = resolution.launcher.clone() {
+            return Ok(launcher);
+        }
+        Err(match resolution.problem {
+            // `describe` already tells the user what to do, so no second hint.
+            Some(problem) => BridgeError::new(
+                crate::error::ErrorKind::AgentUnavailable,
+                problem.describe(
+                    AgentId::Claude,
+                    &resolution.detail.clone().unwrap_or_default(),
+                ),
+            ),
+            None => BridgeError::new(
+                crate::error::ErrorKind::AgentUnavailable,
+                "Claude Code is not installed.",
+            )
+            .with_hint("Install Claude Code, or set its install location in Settings."),
+        })
     }
 
     /// Default config directory when `CLAUDE_CONFIG_DIR` is not set.
@@ -839,45 +899,39 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn detect(&self) -> BridgeResult<AgentDetection> {
-        let which = tauri::async_runtime::block_on(detect::which("claude"));
         let (config_dir, from_env) = Self::config_dir()?;
         let settings_path = config_dir.join("settings.json");
 
-        let mut executable = which.first().cloned();
-        if executable.is_none() {
-            let candidates = detect::known_locations(
-                &crate::paths::home_dir()?,
-                &["claude.exe", "claude.cmd", "claude"],
-                &[
-                    ".claude\\local",
-                    ".local\\bin",
-                    "AppData\\Local\\Programs\\claude",
-                ],
-            );
-            executable = detect::first_existing(&candidates);
-        }
-
-        let Some(executable) = executable else {
-            return Ok(AgentDetection::not_installed(
-                AgentId::Claude,
-                INSTALL_GUIDE_URL,
-            ));
+        let resolution = self.resolve_launcher();
+        let Some(launcher) = resolution.launcher.clone() else {
+            let mut detection = AgentDetection::not_installed(AgentId::Claude, INSTALL_GUIDE_URL);
+            locate::apply_resolution(&mut detection, &resolution, None);
+            return Ok(detection);
         };
 
-        let version = tauri::async_runtime::block_on(detect::version_of(&executable));
+        let probe = tauri::async_runtime::block_on(detect::version_of_launcher(&launcher));
+        let version = probe.as_ref().ok().cloned();
 
-        Ok(AgentDetection {
+        let mut detection = AgentDetection {
             agent: AgentId::Claude,
             display_name: AgentId::Claude.display_name().to_string(),
             installed: true,
-            executable: Some(executable.display().to_string()),
+            executable: Some(launcher.path().display().to_string()),
             version,
             config_path: Some(settings_path.display().to_string()),
             config_dir: Some(config_dir.display().to_string()),
             config_dir_from_env: from_env,
             note: None,
             install_guide_url: Some(INSTALL_GUIDE_URL.to_string()),
-        })
+            location_mode: None,
+            configured_location: None,
+            location_problem: None,
+            location_detail: None,
+        };
+
+        let installed = locate::apply_resolution(&mut detection, &resolution, probe.as_ref().err());
+        detection.installed = installed;
+        Ok(detection)
     }
 
     fn locate_config(&self) -> BridgeResult<PathBuf> {
@@ -1198,16 +1252,10 @@ impl AgentAdapter for ClaudeAdapter {
     }
 
     fn launch_argv(&self, project_dir: &Path) -> BridgeResult<LaunchPlan> {
-        let detection = self.detect()?;
-        let executable = detection.executable.ok_or_else(|| {
-            BridgeError::new(
-                crate::error::ErrorKind::AgentUnavailable,
-                "Claude Code is not installed.",
-            )
-            .with_hint("Install Claude Code, then press Refresh.")
-        })?;
-
-        crate::process::build_launch_plan(AgentId::Claude, Path::new(&executable), project_dir)
+        // The same resolver detection uses, so the file that is launched is the
+        // file detection reported, including a saved install location.
+        let launcher = self.launcher_for_launch()?;
+        crate::process::build_launch_plan(AgentId::Claude, launcher.path(), project_dir)
     }
 
     fn launch_env(&self, _secret: Option<&str>) -> BridgeResult<Vec<(String, String)>> {

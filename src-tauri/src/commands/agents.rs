@@ -1,8 +1,11 @@
 //! Agent detection and status commands.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::adapters::{AgentDetection, AgentDiagnostics, AgentId, ConfigParseState};
+use crate::adapters::locate::{self, AgentLocation, AgentLocations, LocationKind};
+use crate::adapters::{
+    AgentDetection, AgentDiagnostics, AgentId, ConfigParseState, LocationMode, LocationProblem,
+};
 use crate::app::AppState;
 use crate::commands::{parse_agent, CommandResult};
 use crate::error::{BridgeError, BridgeResult};
@@ -34,6 +37,18 @@ pub struct AgentSummary {
     pub active_profile_name: Option<String>,
     /// Whether the configuration file can be modified safely.
     pub config_writable: bool,
+    /// Whether the launcher came from automatic detection or a saved location.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_mode: Option<LocationMode>,
+    /// The saved location, when the user set one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configured_location: Option<String>,
+    /// Why a saved location produced no usable launcher, when it did not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_problem: Option<LocationProblem>,
+    /// A path or agent-specific hint explaining `location_problem`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location_detail: Option<String>,
 }
 
 /// Build a summary from a detection plus its config state.
@@ -67,6 +82,10 @@ fn summarise(
             .to_string(),
         active_profile_name: active.as_ref().and_then(|a| a.profile_name.clone()),
         config_writable: state != ConfigParseState::Invalid,
+        location_mode: detection.location_mode,
+        configured_location: detection.configured_location,
+        location_problem: detection.location_problem,
+        location_detail: detection.location_detail,
     }
 }
 
@@ -148,6 +167,89 @@ pub async fn refresh_agent(
     .map_err(|err| {
         crate::commands::CommandError::from(
             BridgeError::internal("Could not refresh this agent.").with_details(err.to_string()),
+        )
+    })?
+    .map_err(Into::into)
+}
+
+/// A saved install location coming from the interface, which is untrusted.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLocationInput {
+    pub path: String,
+    #[serde(default)]
+    pub kind: LocationKind,
+}
+
+/// The result of saving or clearing one agent's install location.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentLocationResult {
+    /// That agent, re-detected against the new setting.
+    pub agent: AgentSummary,
+    /// Every agent's saved location, so the settings screen can redraw.
+    pub agent_locations: AgentLocations,
+}
+
+/// Save or clear one agent's install location.
+///
+/// `location: null` restores automatic detection. Only the named agent is
+/// affected: the other two keep whatever they had, and no other setting is
+/// touched. Detection for the changed agent is re-run here, so the status the
+/// caller renders is the one the backend just observed rather than a guess.
+#[tauri::command]
+pub async fn set_agent_location(
+    state: tauri::State<'_, AppState>,
+    agent: String,
+    location: Option<AgentLocationInput>,
+) -> CommandResult<AgentLocationResult> {
+    let state = state.inner().clone();
+    let agent = parse_agent(&agent)?;
+    tauri::async_runtime::spawn_blocking(move || -> BridgeResult<AgentLocationResult> {
+        let location = match location {
+            Some(input) => Some(locate::validate_location(AgentLocation::new(
+                input.path, input.kind,
+            ))?),
+            None => None,
+        };
+        state.set_agent_location(agent, location)?;
+
+        let adapter = state.adapter(agent);
+        let detection = adapter.detect().unwrap_or_else(|err| {
+            // Saving succeeded; a detection failure is reported as "not
+            // installed" for this agent only, exactly like the agent list does.
+            tracing::warn!(
+                target: "eclink",
+                agent = agent.as_str(),
+                error = %err,
+                "agent detection failed after an install location change"
+            );
+            AgentDetection::not_installed(agent, "")
+        });
+        let snapshot = adapter.read_config().ok();
+        let active = if detection.installed {
+            adapter.get_active_profile().ok()
+        } else {
+            None
+        };
+        let summary = summarise(
+            detection,
+            snapshot
+                .as_ref()
+                .map(|s| s.state)
+                .unwrap_or(ConfigParseState::Missing),
+            active,
+        );
+        Ok(AgentLocationResult {
+            agent: summary,
+            agent_locations: state.agent_locations(),
+        })
+    })
+    .await
+    .map_err(|err| {
+        crate::commands::CommandError::from(
+            BridgeError::internal("Could not update the install location.")
+                .with_details(err.to_string()),
         )
     })?
     .map_err(Into::into)

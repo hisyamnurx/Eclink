@@ -74,6 +74,11 @@ returns `Unknown setting`.
 | Registry validation | `omp models --json` |
 | Role readback | `omp config get modelRoles --json` |
 
+All four run the same resolved executable that detection reports. If the user has
+saved an install location in Settings, that file is used and the `PATH` lookup is
+not consulted at all; a saved location that has gone missing is an error rather
+than a reason to validate against a different OMP installation.
+
 `omp models --json` exits successfully and lists the provider only when
 `models.yml` parsed. Eclink uses that as the post-write verification and rolls
 both files back if it fails.

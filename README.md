@@ -78,7 +78,20 @@ the keys it owns:
 
 Comments, key order, line endings, and every unrelated setting survive. An edit
 made in another program between reading and writing aborts the change rather than
-clobbering it. OMP backups are sealed with Windows DPAPI because its provider
+clobbering it.
+
+### Agent install locations
+
+Eclink finds Codex, Claude Code, and Oh My Pi on `PATH` by default. If an agent
+is installed somewhere else, **Settings → Agent install locations** can point
+Eclink at the installation folder or directly at the launcher file. Each agent has
+its own row, and each defaults to automatic detection.
+
+A saved location replaces the `PATH` lookup for that agent only: it is what
+detection, version probing, Oh My Pi's `omp models --json` validation, and Launch
+all use. It never moves an agent's configuration, changes the active profile,
+copies files, or edits your `PATH`. Clearing it restores automatic detection, and
+the choice is stored in `app.json` so it survives a restart. OMP backups are sealed with Windows DPAPI because its provider
 file may legitimately contain a literal key; Codex and Claude Code backups keep
 their existing redaction policy.
 

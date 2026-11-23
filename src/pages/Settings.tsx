@@ -18,11 +18,27 @@ import {
   LoadingState,
   Meta,
 } from "../components/ui";
-import { call, type LogLevel, type UpdateStatus } from "../lib/api";
+import { agentLabel, AGENT_ORDER } from "../lib/agents";
+import {
+  call,
+  type AgentId,
+  type AgentLocation,
+  type AgentLocationInput,
+  type AgentSummary,
+  type LocationKind,
+  type LogLevel,
+  type UpdateStatus,
+} from "../lib/api";
 import { relativeTime } from "../lib/format";
 import { useAsyncData } from "../lib/hooks";
 import { LANGUAGES, LANGUAGE_NAMES, isLanguage, type MessageKey } from "../lib/i18n";
-import { copyToClipboard, openUrl } from "../lib/opener";
+import {
+  effectiveLocationMode,
+  inferLocationKind,
+  locationModeKey,
+  locationProblemKey,
+} from "../lib/locations";
+import { copyToClipboard, openUrl, pickDirectory, pickLauncherFile } from "../lib/opener";
 import { useAction, useApp } from "../state/AppContext";
 
 export function Settings() {
@@ -134,6 +150,8 @@ export function Settings() {
         </Field>
       </section>
 
+      <AgentLocationsPanel />
+
       <section className="card" aria-labelledby="set-about">
         <h2 id="set-about">{t("settings.aboutSection")}</h2>
         <Meta
@@ -182,6 +200,197 @@ export function Settings() {
       <UpdatePanel />
       <DiagnosticsPanel />
       <LogsPanel />
+    </div>
+  );
+}
+
+/**
+ * Per-agent install locations.
+ *
+ * Every agent defaults to automatic detection, which is what the app did before
+ * this section existed. A saved folder or launcher file is an override for an
+ * installation that PATH does not mention; it never moves configuration, changes
+ * the active profile, or edits PATH, and the copy here says so.
+ */
+function AgentLocationsPanel() {
+  const { agents, settings, t } = useApp();
+
+  return (
+    <section className="card" aria-labelledby="set-locations">
+      <div className="card__header">
+        <div className="card__title">
+          <h2 id="set-locations">{t("settings.locations")}</h2>
+          <div className="card__hint">{t("settings.locationsBody")}</div>
+        </div>
+      </div>
+
+      <div className="stack">
+        {AGENT_ORDER.map((agent, index) => (
+          <div key={agent} className="stack stack--tight">
+            {/* A rule between rows keeps three agent blocks from reading as one. */}
+            {index > 0 && <hr className="divider" />}
+            <AgentLocationRow
+              agent={agent}
+              summary={agents.find((item) => item.agent === agent)}
+              configured={settings?.agentLocations?.[agent]}
+            />
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AgentLocationRow({
+  agent,
+  summary,
+  configured,
+}: {
+  agent: AgentId;
+  summary: AgentSummary | undefined;
+  configured: AgentLocation | undefined;
+}) {
+  const { t, notify, setAgentLocation } = useApp();
+  // `null` means "show the saved value". Typing or picking sets an override, and
+  // a successful save clears it so the field shows what was actually stored.
+  // Deriving the value this way avoids an effect that would reset the field on
+  // every render of a settings object that has not changed.
+  const [typed, setTyped] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const draft = typed ?? configured?.path ?? "";
+  const label = agentLabel(agent);
+  const problem = summary?.locationProblem;
+  const mode = effectiveLocationMode(summary?.locationMode, configured);
+
+  const apply = async (location: AgentLocationInput | null) => {
+    setBusy(true);
+    try {
+      await setAgentLocation(agent, location);
+      setTyped(null);
+      notify(
+        "success",
+        location
+          ? t("settings.locationSaved", { agent: label })
+          : t("settings.locationResetDone", { agent: label }),
+      );
+    } catch (error) {
+      const api = error as { message?: string; hint?: string };
+      notify("error", api.message ?? t("settings.couldNotSave"), api.hint);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const choose = async (kind: LocationKind) => {
+    const title =
+      kind === "folder"
+        ? t("settings.locationPickerFolder", { agent: label })
+        : t("settings.locationPickerLauncher", { agent: label });
+    try {
+      const picked =
+        kind === "folder"
+          ? await pickDirectory(title, draft.trim() || undefined)
+          : await pickLauncherFile(title);
+      if (!picked) return;
+      setTyped(picked);
+      await apply({ path: picked, kind });
+    } catch (error) {
+      const api = error as { message?: string; hint?: string };
+      notify("error", api.message ?? t("settings.couldNotSave"), api.hint);
+    }
+  };
+
+  return (
+    <div className="stack stack--tight">
+      <div className="card__header">
+        <div className="card__title">
+          <h3>{label}</h3>
+        </div>
+        <div className="card__actions">
+          <Badge
+            tone={summary ? (summary.installed ? "ok" : "warn") : "neutral"}
+            dot={Boolean(summary)}
+          >
+            {summary
+              ? summary.installed
+                ? t("status.detected")
+                : t("status.notFound")
+              : t("settings.locationNotDetected")}
+          </Badge>
+        </div>
+      </div>
+
+      <Meta
+        items={[
+          { key: t("settings.locationSource"), value: t(locationModeKey(mode)) },
+          {
+            key: t("home.version"),
+            value: summary?.version ?? t("home.versionUnknown"),
+            mono: Boolean(summary?.version),
+          },
+          {
+            key: t("settings.locationEffective"),
+            value: summary?.executable ?? t("settings.locationNotDetected"),
+            mono: Boolean(summary?.executable),
+          },
+          ...(configured
+            ? [
+                {
+                  key: t("settings.locationConfigured"),
+                  value: configured.path,
+                  mono: true,
+                },
+              ]
+            : []),
+        ]}
+      />
+
+      {problem && (
+        <Banner tone="warn" title={t("home.locationProblemTitle", { agent: label })}>
+          {t(locationProblemKey(problem), {
+            agent: label,
+            path: summary?.locationDetail ?? configured?.path ?? "",
+          })}{" "}
+          {t("settings.locationProblemHint")}
+        </Banner>
+      )}
+
+      <Field
+        label={t("settings.locationPathLabel")}
+        htmlFor={`location-${agent}`}
+        hint={t("settings.locationPathHint")}
+      >
+        <div className="row row--wrap">
+          <input
+            id={`location-${agent}`}
+            className="input mono"
+            value={draft}
+            onChange={(event) => setTyped(event.target.value)}
+            placeholder={"C:\\Tools\\" + agent}
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <Button onClick={() => void choose("folder")} busy={busy}>
+            {t("settings.locationChooseFolder")}
+          </Button>
+          <Button onClick={() => void choose("launcher")} busy={busy}>
+            {t("settings.locationChooseLauncher")}
+          </Button>
+          <Button
+            variant="primary"
+            busy={busy}
+            disabled={!draft.trim()}
+            onClick={() => void apply({ path: draft.trim(), kind: inferLocationKind(draft) })}
+          >
+            {t("settings.locationSave")}
+          </Button>
+          {configured && (
+            <Button variant="ghost" busy={busy} onClick={() => void apply(null)}>
+              {t("settings.locationReset")}
+            </Button>
+          )}
+        </div>
+      </Field>
     </div>
   );
 }

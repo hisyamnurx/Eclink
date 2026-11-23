@@ -32,6 +32,7 @@ pub fn builder() -> BridgeResult<tauri::Builder<tauri::Wry>> {
             // ---- agents -------------------------------------------------
             crate::commands::list_agents,
             crate::commands::refresh_agent,
+            crate::commands::set_agent_location,
             crate::commands::get_diagnostics,
             // ---- profiles -----------------------------------------------
             crate::commands::list_profiles,

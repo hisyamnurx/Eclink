@@ -8,6 +8,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 > **Eclink is an independent open-source project and is not affiliated
 > with, endorsed by, or sponsored by OpenAI or Anthropic.**
 
+## [Unreleased]
+
+### Added
+
+- **Per-agent install locations.** Settings now has an **Agent install locations**
+  section with a row for Codex CLI, Claude Code, and Oh My Pi. Each row defaults
+  to automatic detection; a folder or a launcher file can be chosen with the
+  native picker or pasted as an absolute path, and each row can be reset back to
+  automatic. A saved location takes priority over `PATH` for that agent only, and
+  is the executable used by detection, version probing, Oh My Pi's registry
+  validation, and Launch. It does not move configuration, change profiles, copy
+  files, or modify `PATH`.
+- **Windows shim support for probing.** A `.cmd`/`.bat` launcher (npm and Bun
+  installs) is now executed through `cmd.exe` for its version and registry
+  probes, with the path passed as one literal argument, so installs in folders
+  containing spaces, apostrophes, or non-ASCII characters resolve correctly.
+
+### Changed
+
+- **Detection probes are bounded.** Version and registry probes now share a
+  timeout that kills the child process; a hung launcher is reported as a
+  timeout instead of blocking the interface.
+- **`app.json` schema version 2.** Adds optional `agentLocations`. A settings
+  file from an earlier version loads unchanged and keeps automatic detection for
+  every agent.
+
+### Fixed
+
+- **A broken saved install location is reported, not silently bypassed.** If a
+  saved folder or launcher disappears or cannot be run, that agent is shown as
+  not detected with the reason and a way back to automatic detection. Eclink no
+  longer falls back to a different installation from `PATH` behind the user's
+  back.
+
 ## [0.3.0] - 2026-11-02
 
 Eclink now manages **Oh My Pi (OMP)** alongside Codex and Claude Code. This is

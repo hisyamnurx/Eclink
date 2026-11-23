@@ -3,7 +3,8 @@
 use std::sync::Arc;
 
 use crate::adapters::{
-    AgentAdapter, AgentId, ClaudeAdapter, CodexAdapter, OmpAdapter, OmpSelection,
+    AgentAdapter, AgentId, AgentLocation, AgentLocations, ClaudeAdapter, CodexAdapter,
+    LocationStore, OmpAdapter, OmpSelection,
 };
 use crate::backup::BackupManager;
 use crate::diagnostics::{LogGuard, LogLevel};
@@ -28,6 +29,9 @@ struct AppStateInner {
     claude: ClaudeAdapter,
     omp: OmpAdapter,
     omp_selection: OmpSelection,
+    /// Live per-agent install locations, shared with every adapter so a change in
+    /// Settings takes effect on the next detection without a restart.
+    locations: LocationStore,
     settings: std::sync::RwLock<AppSettings>,
     /// Held for the process lifetime so the log flusher stays alive.
     _log_guard: std::sync::Mutex<Option<LogGuard>>,
@@ -70,6 +74,14 @@ pub struct AppSettings {
     /// Defaulted so an `app.json` from v0.2.x keeps loading.
     #[serde(default = "default_omp_profile")]
     pub omp_profile: String,
+    /// Per-agent installation folders or launcher files (PRD §14.3).
+    ///
+    /// Absent entries mean automatic detection. Defaulted so an `app.json`
+    /// written before this feature existed keeps loading and behaves exactly as
+    /// it did. It is always serialised, including as `{}`, so the settings view
+    /// the interface receives always has the field to read.
+    #[serde(default)]
+    pub agent_locations: AgentLocations,
 }
 
 fn default_omp_profile() -> String {
@@ -141,6 +153,7 @@ impl Default for AppSettings {
             insecure_endpoint_notice_seen: false,
             language: default_language(),
             omp_profile: default_omp_profile(),
+            agent_locations: AgentLocations::default(),
         }
     }
 }
@@ -172,20 +185,23 @@ impl AppState {
         // History ledger is rooted in the same place for every agent.
         let backups = BackupManager::new(paths.backups_dir());
         let omp_selection = OmpSelection::new(settings.omp_profile.clone());
-        let omp = OmpAdapter::new(
+        let locations = LocationStore::new(settings.agent_locations.clone());
+        let omp = OmpAdapter::with_locations(
             backups.clone(),
             paths.root().join("omp-ledger.json"),
             omp_selection.clone(),
+            locations.clone(),
         );
 
         Ok(Self {
             inner: Arc::new(AppStateInner {
                 profiles: ProfileStore::new(paths.profiles_json()),
                 secrets: SecretStore::new(paths.secrets_dat()),
-                codex: CodexAdapter::new(backups.clone()),
-                claude: ClaudeAdapter::new(backups),
+                codex: CodexAdapter::with_locations(backups.clone(), locations.clone()),
+                claude: ClaudeAdapter::with_locations(backups, locations.clone()),
                 omp,
                 omp_selection,
+                locations,
                 paths,
                 settings: std::sync::RwLock::new(settings),
                 _log_guard: std::sync::Mutex::new(log_guard),
@@ -264,6 +280,30 @@ impl AppState {
             .read()
             .map(|guard| guard.clone())
             .unwrap_or_default()
+    }
+
+    /// Every agent's saved install location.
+    pub fn agent_locations(&self) -> AgentLocations {
+        self.inner.locations.snapshot()
+    }
+
+    /// Save or clear one agent's install location.
+    ///
+    /// `app.json` is written first and the live store is updated only after that
+    /// succeeds. A failed write therefore leaves the running process on the
+    /// location it actually has on disk, rather than on one that would disappear
+    /// at the next launch. Other agents and every other setting are untouched.
+    pub fn set_agent_location(
+        &self,
+        agent: AgentId,
+        location: Option<AgentLocation>,
+    ) -> BridgeResult<AgentLocations> {
+        let persisted = location.clone();
+        self.update_settings(move |settings| {
+            settings.agent_locations.set(agent, persisted);
+        })?;
+        self.inner.locations.set(agent, location);
+        Ok(self.agent_locations())
     }
 
     /// Replace settings and persist them.

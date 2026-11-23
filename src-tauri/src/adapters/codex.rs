@@ -21,6 +21,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::adapters::detect;
+use crate::adapters::locate::{self, Launcher, LocationStore};
 use crate::adapters::{
     ActiveConfiguration, ActiveConfigurationKind, AgentAdapter, AgentDetection, AgentDiagnostics,
     ApplyOptions, ApplyOutcome, ConfigParseState, ConfigSnapshot, LaunchPlan,
@@ -47,13 +48,70 @@ pub const AUTH_COMMAND_MIN_VERSION: (u64, u64, u64) = (0, 20, 0);
 pub const FALLBACK_ENV_KEY: &str = "ECLYZER_BRIDGE_CODEX_API_KEY";
 
 /// The Codex agent adapter.
+#[derive(Clone)]
 pub struct CodexAdapter {
     backups: BackupManager,
+    /// Per-agent install location, shared with `AppState` so a change in Settings
+    /// is visible to detection without rebuilding the adapter.
+    locations: LocationStore,
 }
 
 impl CodexAdapter {
     pub fn new(backups: BackupManager) -> Self {
-        Self { backups }
+        Self::with_locations(backups, LocationStore::default())
+    }
+
+    /// Build an adapter that honours saved install locations.
+    pub fn with_locations(backups: BackupManager, locations: LocationStore) -> Self {
+        Self { backups, locations }
+    }
+
+    /// The lookup order used when automatic detection applies (PRD §14.1).
+    ///
+    /// Unchanged on purpose: an installation that worked before this feature must
+    /// resolve to exactly the same executable afterwards.
+    fn automatic_launcher() -> Option<PathBuf> {
+        let which = tauri::async_runtime::block_on(detect::which("codex"));
+        if let Some(found) = which.first() {
+            return Some(found.clone());
+        }
+        let home = crate::paths::home_dir().ok()?;
+        let candidates = detect::known_locations(
+            &home,
+            locate::CODEX_LAUNCHER_NAMES,
+            &[".codex\\bin", ".cargo\\bin"],
+        );
+        detect::first_existing(&candidates)
+    }
+
+    /// Resolve the launcher this adapter would run, honouring a saved location.
+    fn resolve_launcher(&self) -> locate::Resolution {
+        self.locations
+            .resolve(AgentId::Codex, Self::automatic_launcher)
+    }
+
+    /// The launcher for Launch, with an error that names the saved location's
+    /// problem rather than claiming Codex is not installed.
+    fn launcher_for_launch(&self) -> BridgeResult<Launcher> {
+        let resolution = self.resolve_launcher();
+        if let Some(launcher) = resolution.launcher.clone() {
+            return Ok(launcher);
+        }
+        Err(match resolution.problem {
+            // `describe` already tells the user what to do, so no second hint.
+            Some(problem) => BridgeError::new(
+                crate::error::ErrorKind::AgentUnavailable,
+                problem.describe(
+                    AgentId::Codex,
+                    &resolution.detail.clone().unwrap_or_default(),
+                ),
+            ),
+            None => BridgeError::new(
+                crate::error::ErrorKind::AgentUnavailable,
+                "Codex is not installed.",
+            )
+            .with_hint("Install Codex, or set its install location in Settings."),
+        })
     }
 
     /// Default config directory when `CODEX_HOME` is not set.
@@ -343,51 +401,58 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn detect(&self) -> BridgeResult<AgentDetection> {
-        // Synchronous facade over the async detector, used by commands that are
-        // already inside a Tokio runtime via `block_in_place`-free polling.
-        let which = tauri::async_runtime::block_on(detect::which("codex"));
+        // Synchronous facade over the async detector: detection runs inside
+        // `spawn_blocking`, so blocking on the probe is safe here.
         let (config_dir, from_env) = Self::config_dir()?;
         let config_path = config_dir.join("config.toml");
 
-        let mut executable = which.first().cloned();
-        if executable.is_none() {
-            let candidates = detect::known_locations(
-                &crate::paths::home_dir()?,
-                &["codex.exe", "codex.cmd", "codex"],
-                &[".codex\\bin", ".cargo\\bin"],
-            );
-            executable = detect::first_existing(&candidates);
-        }
-
-        let Some(executable) = executable else {
-            return Ok(AgentDetection::not_installed(
-                AgentId::Codex,
-                INSTALL_GUIDE_URL,
-            ));
+        let resolution = self.resolve_launcher();
+        let Some(launcher) = resolution.launcher.clone() else {
+            // No launcher: either automatic detection found nothing, or the saved
+            // location is unusable. `apply_resolution` attaches the reason.
+            let mut detection = AgentDetection::not_installed(AgentId::Codex, INSTALL_GUIDE_URL);
+            locate::apply_resolution(&mut detection, &resolution, None);
+            return Ok(detection);
         };
 
-        let version = tauri::async_runtime::block_on(detect::version_of(&executable));
+        let probe = tauri::async_runtime::block_on(detect::version_of_launcher(&launcher));
+        let version = probe.as_ref().ok().cloned();
 
-        let note = match &version {
-            Some(v) if !detect::version_at_least(v, AUTH_COMMAND_MIN_VERSION) => Some(format!(
-                "Codex {v} is older than {}.{}.{}. Eclink will use an environment-based credential instead of a credential helper.",
-                AUTH_COMMAND_MIN_VERSION.0, AUTH_COMMAND_MIN_VERSION.1, AUTH_COMMAND_MIN_VERSION.2
-            )),
-            _ => None,
-        };
-
-        Ok(AgentDetection {
+        let mut detection = AgentDetection {
             agent: AgentId::Codex,
             display_name: AgentId::Codex.display_name().to_string(),
             installed: true,
-            executable: Some(executable.display().to_string()),
-            version,
+            executable: Some(launcher.path().display().to_string()),
+            version: version.clone(),
             config_path: Some(config_path.display().to_string()),
             config_dir: Some(config_dir.display().to_string()),
             config_dir_from_env: from_env,
-            note,
+            note: None,
             install_guide_url: Some(INSTALL_GUIDE_URL.to_string()),
-        })
+            location_mode: None,
+            configured_location: None,
+            location_problem: None,
+            location_detail: None,
+        };
+
+        // In automatic mode a failed probe only means "version unknown", exactly
+        // as before. A saved location that cannot be executed is a problem the
+        // user has to see and fix.
+        let installed = locate::apply_resolution(&mut detection, &resolution, probe.as_ref().err());
+
+        if installed {
+            if let Some(version) = version.as_deref() {
+                if !detect::version_at_least(version, AUTH_COMMAND_MIN_VERSION) {
+                    detection.note = Some(format!(
+                        "Codex {version} is older than {}.{}.{}. Eclink will use an environment-based credential instead of a credential helper.",
+                        AUTH_COMMAND_MIN_VERSION.0, AUTH_COMMAND_MIN_VERSION.1, AUTH_COMMAND_MIN_VERSION.2
+                    ));
+                }
+            }
+        }
+        detection.installed = installed;
+
+        Ok(detection)
     }
 
     fn locate_config(&self) -> BridgeResult<PathBuf> {
@@ -717,16 +782,10 @@ impl AgentAdapter for CodexAdapter {
     }
 
     fn launch_argv(&self, project_dir: &Path) -> BridgeResult<LaunchPlan> {
-        let detection = self.detect()?;
-        let executable = detection.executable.ok_or_else(|| {
-            BridgeError::new(
-                crate::error::ErrorKind::AgentUnavailable,
-                "Codex is not installed.",
-            )
-            .with_hint("Install Codex, then press Refresh.")
-        })?;
-
-        crate::process::build_launch_plan(AgentId::Codex, Path::new(&executable), project_dir)
+        // One resolver for detection, version probing, and Launch: the file that
+        // is launched is the file detection reported, including a saved location.
+        let launcher = self.launcher_for_launch()?;
+        crate::process::build_launch_plan(AgentId::Codex, launcher.path(), project_dir)
     }
 
     fn launch_env(&self, secret: Option<&str>) -> BridgeResult<Vec<(String, String)>> {

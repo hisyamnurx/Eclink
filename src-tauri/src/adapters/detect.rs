@@ -10,10 +10,71 @@ use std::time::Duration;
 
 use tokio::process::Command;
 
-use crate::error::BridgeResult;
+use crate::adapters::locate::{Launcher, LocationProblem};
 
 /// Maximum time a detection subprocess may take.
 pub const DETECTION_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Creation flag that keeps a console window from flashing when a probe runs a
+/// console executable such as `cmd.exe` from the GUI process.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// Why running an agent executable did not produce output Eclink can use.
+///
+/// This is deliberately finer than a `BridgeError`: the interface distinguishes
+/// "it never answered" from "it answered with an error" when a saved install
+/// location turns out to be unusable, and a timeout has to be recognisable after
+/// the fact without matching on a message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProbeError {
+    /// The process was still running at the timeout and has been killed.
+    TimedOut,
+    /// The process could not be started at all.
+    Unavailable(String),
+    /// The process started and exited unsuccessfully.
+    Failed(String),
+    /// The process succeeded but printed nothing usable.
+    Unreadable(String),
+}
+
+impl ProbeError {
+    /// The machine code the interface reports for a saved location that failed.
+    pub fn location_problem(&self) -> LocationProblem {
+        match self {
+            ProbeError::TimedOut => LocationProblem::Timeout,
+            _ => LocationProblem::Unusable,
+        }
+    }
+
+    /// A sentence naming the agent, for an error the user sees.
+    pub fn message(&self, agent_name: &str) -> String {
+        match self {
+            ProbeError::TimedOut => {
+                format!("{agent_name} did not respond in time.")
+            }
+            ProbeError::Unavailable(_) => {
+                format!("Eclink could not run {agent_name}.")
+            }
+            ProbeError::Failed(_) => {
+                format!("{agent_name} exited with an error.")
+            }
+            ProbeError::Unreadable(_) => {
+                format!("{agent_name} printed something Eclink could not read.")
+            }
+        }
+    }
+
+    /// Technical detail, already truncated, for the error's `details` field.
+    pub fn detail(&self) -> Option<String> {
+        match self {
+            ProbeError::TimedOut => None,
+            ProbeError::Unavailable(detail)
+            | ProbeError::Failed(detail)
+            | ProbeError::Unreadable(detail) => Some(detail.clone()),
+        }
+    }
+}
 
 /// Result of running `where <name>`.
 #[derive(Debug, Clone, Default)]
@@ -59,32 +120,24 @@ pub async fn which(name: &str) -> WhichResult {
     result
 }
 
-/// Run `<executable> --version` and return the trimmed first line.
+/// Run `<executable> --version` and return the trimmed, normalised version.
 ///
-/// The executable path comes from detection, never from user input, and is
-/// passed as argv rather than being interpolated into a shell string
-/// (PRD §27, §63).
-pub async fn version_of(executable: &Path) -> Option<String> {
-    let output = tokio::time::timeout(
-        DETECTION_TIMEOUT,
-        Command::new(executable)
-            .arg("--version")
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output(),
-    )
-    .await;
+/// The launcher path comes from detection or from the user's saved location, and
+/// is passed as argv rather than being interpolated into a shell string (PRD §27,
+/// §63). A Windows shim is run through `cmd.exe` by [`Launcher::invocation`], so
+/// npm- and Bun-installed agents are probed the same way they are launched.
+pub async fn version_of(executable: &Path) -> Result<String, ProbeError> {
+    version_of_launcher(&Launcher::from_path(executable.to_path_buf())).await
+}
 
-    let Ok(Ok(output)) = output else {
-        return None;
-    };
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let line = stdout.lines().find(|l| !l.trim().is_empty())?;
-    Some(clean_version(line))
+/// Run a launcher's `--version` and return the cleaned version line.
+pub async fn version_of_launcher(launcher: &Launcher) -> Result<String, ProbeError> {
+    let stdout = probe_launcher(launcher, &["--version"]).await?;
+    let line = stdout
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| ProbeError::Unreadable("It printed no version.".to_string()))?;
+    Ok(clean_version(line))
 }
 
 /// Strip a leading product name from a version line.
@@ -184,35 +237,78 @@ pub fn dir_exists(path: &Path) -> bool {
     path.is_dir()
 }
 
-/// Run an arbitrary detected-agent command with a timeout, returning stdout.
+/// Run a launcher command under a timeout, returning stdout.
 ///
-/// Used for `--version` style probes. The command is always a resolved
-/// executable plus a fixed argv, never a shell string.
-pub async fn run_capture(program: &Path, args: &[&str]) -> BridgeResult<String> {
-    let output = tokio::time::timeout(
-        DETECTION_TIMEOUT,
-        Command::new(program)
-            .args(args)
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output(),
-    )
-    .await
-    .map_err(|_| {
-        crate::error::BridgeError::new(
-            crate::error::ErrorKind::AgentUnavailable,
-            "The agent did not respond in time.",
-        )
-    })?
-    .map_err(|err| {
-        crate::error::BridgeError::new(
-            crate::error::ErrorKind::AgentUnavailable,
-            "Could not run the agent executable.",
-        )
-        .with_details(err.to_string())
-    })?;
+/// Used for `--version` style probes and for OMP's registry check. The command is
+/// always a resolved launcher plus a fixed argv, never a shell string. On timeout
+/// the child is killed (`kill_on_drop`), so a hung agent cannot keep running after
+/// Eclink has already reported a failure.
+pub async fn probe_launcher(launcher: &Launcher, args: &[&str]) -> Result<String, ProbeError> {
+    probe_launcher_with_env(launcher, args, &[]).await
+}
+
+/// [`probe_launcher`] with environment variables applied to the child only.
+///
+/// OMP's registry check needs `PI_CODING_AGENT_DIR`; the overlay is scoped to
+/// this process and never written to the user's global environment.
+pub async fn probe_launcher_with_env(
+    launcher: &Launcher,
+    args: &[&str],
+    env: &[(String, String)],
+) -> Result<String, ProbeError> {
+    probe_launcher_with_timeout(launcher, args, env, DETECTION_TIMEOUT).await
+}
+
+/// [`probe_launcher_with_env`] with an explicit timeout, for tests.
+pub async fn probe_launcher_with_timeout(
+    launcher: &Launcher,
+    args: &[&str],
+    env: &[(String, String)],
+    timeout: Duration,
+) -> Result<String, ProbeError> {
+    let (program, argv) = launcher.invocation(args);
+    let mut command = Command::new(&program);
+    command
+        .args(&argv)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true);
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    #[cfg(windows)]
+    command.creation_flags(CREATE_NO_WINDOW);
+
+    let output = tokio::time::timeout(timeout, command.output())
+        .await
+        .map_err(|_| ProbeError::TimedOut)?
+        .map_err(|err| ProbeError::Unavailable(truncate(&err.to_string(), 400)))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let detail = stderr.trim();
+        let fallback = format!("exit status {}", output.status);
+        return Err(ProbeError::Failed(truncate(
+            if detail.is_empty() {
+                fallback.as_str()
+            } else {
+                detail
+            },
+            400,
+        )));
+    }
 
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// Keep an error detail short enough to read and to store in a log line.
+fn truncate(value: &str, limit: usize) -> String {
+    let mut out: String = value.chars().take(limit).collect();
+    if value.chars().count() > limit {
+        out.push('…');
+    }
+    out
 }
 
 #[cfg(test)]
@@ -319,5 +415,104 @@ mod tests {
     async fn which_returns_empty_for_missing_binary() {
         let found = which("eclyzer-definitely-not-a-real-binary-xyz").await;
         assert!(found.paths.is_empty());
+    }
+
+    /// Write a Windows shim that prints `version`.
+    fn write_shim(dir: &Path, name: &str, body: &str) -> PathBuf {
+        std::fs::create_dir_all(dir).unwrap();
+        let path = dir.join(name);
+        std::fs::write(&path, body.as_bytes()).unwrap();
+        path
+    }
+
+    #[tokio::test]
+    async fn a_windows_shim_is_probed_through_cmd_with_spaces_and_apostrophes() {
+        // npm and Bun install `codex.cmd`, not `codex.exe`. A path containing a
+        // space, an apostrophe, and non-ASCII characters is the case where naive
+        // quoting breaks: `cmd.exe` must receive the path as one literal entry.
+        let dir = tempfile::tempdir().unwrap();
+        let shim = write_shim(
+            &dir.path().join("Program Files O'Brien Ünïcødé"),
+            "codex.cmd",
+            "@echo off\r\necho codex-cli 9.9.9\r\n",
+        );
+
+        let launcher = Launcher::from_path(shim.clone());
+        let version = version_of_launcher(&launcher).await.unwrap();
+
+        assert_eq!(version, "9.9.9");
+        // The invocation must name the shim once and keep it as one argv entry.
+        let (program, argv) = launcher.invocation(&["--version"]);
+        assert!(
+            program
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .ends_with("cmd.exe"),
+            "a shim must run through cmd.exe, got {}",
+            program.display()
+        );
+        assert_eq!(argv[..3], ["/d", "/c", "call"], "argv: {argv:?}");
+        assert_eq!(
+            argv[3],
+            shim.display().to_string(),
+            "the shim path is one entry and is not split: {argv:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_hung_probe_is_killed_and_reported_as_a_timeout() {
+        // `ping` takes about nine seconds here; the probe must give up long before
+        // that and say so, rather than blocking detection.
+        let dir = tempfile::tempdir().unwrap();
+        let shim = write_shim(
+            dir.path(),
+            "slow.cmd",
+            "@echo off\r\nping -n 10 127.0.0.1 >nul\r\necho codex-cli 9.9.9\r\n",
+        );
+
+        let launcher = Launcher::from_path(shim);
+        let error =
+            probe_launcher_with_timeout(&launcher, &["--version"], &[], Duration::from_millis(250))
+                .await
+                .unwrap_err();
+
+        assert_eq!(error, ProbeError::TimedOut);
+        assert_eq!(
+            error.location_problem(),
+            LocationProblem::Timeout,
+            "a timeout is reported distinctly so the copy can say so"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_shim_that_exits_with_an_error_is_not_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let shim = write_shim(
+            dir.path(),
+            "broken.cmd",
+            "@echo off\r\necho nope 1>&2\r\nexit /b 3\r\n",
+        );
+
+        let error = version_of_launcher(&Launcher::from_path(shim))
+            .await
+            .unwrap_err();
+
+        match error {
+            ProbeError::Failed(detail) => assert!(detail.contains("nope"), "{detail}"),
+            other => panic!("expected a failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_native_executable_is_still_run_directly() {
+        // `cmd.exe /c exit 0` as a native launcher: no shim wrapper is involved.
+        let comspec = std::env::var_os("ComSpec")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("cmd.exe"));
+        let launcher = Launcher::from_path(comspec);
+        let (program, argv) = launcher.invocation(&["/c", "exit", "0"]);
+
+        assert_eq!(program, launcher.path());
+        assert_eq!(argv, ["/c", "exit", "0"]);
     }
 }
