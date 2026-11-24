@@ -934,7 +934,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let only = dir.path().join("npm").join("codex");
 
-        assert_eq!(CodexAdapter::choose_launcher(&[only.clone()]), Some(only));
+        assert_eq!(
+            CodexAdapter::choose_launcher(std::slice::from_ref(&only)),
+            Some(only)
+        );
         assert_eq!(CodexAdapter::choose_launcher(&[]), None);
     }
 
