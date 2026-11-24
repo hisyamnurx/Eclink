@@ -94,14 +94,14 @@ fn kill_tree(pid: u32) {
 }
 
 fn assert_fixture_recorded(text: &str, project: &Path) {
-    let expected = format!(
-        "cwd=\"{}\"",
-        eclink_lib::process::strip_verbatim_prefix(project.canonicalize().unwrap()).display()
-    );
-    assert!(
-        text.contains(&expected),
-        "cwd was not the project; expected {expected}; got {text}"
-    );
+    let recorded = text
+        .lines()
+        .find_map(|line| line.strip_prefix("cwd=\"")?.strip_suffix('"'))
+        .expect("fixture did not record a working directory");
+    // Windows can report an 8.3 alias for the same project.
+    let actual = Path::new(recorded).canonicalize().unwrap();
+    let expected = project.canonicalize().unwrap();
+    assert_eq!(actual, expected, "cwd was not the project");
     for token in ["--profile", "work", "--model", "p/m"] {
         assert!(text.contains(token), "argument {token} was mangled: {text}");
     }
