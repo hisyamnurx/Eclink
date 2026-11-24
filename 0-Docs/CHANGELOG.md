@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-11-24
+
 ### Added
 
 - **Per-agent install locations.** Settings now has an **Agent install locations**
@@ -56,6 +58,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carried as an encoded PowerShell script, which contains no quotes, apostrophes,
   or spaces. Launching a native launcher in the PowerShell fallback now also
   gets a real console window instead of a detached process with nowhere to run.
+
+- **Interactive PowerShell fallback.** Launch leaves the standard streams available
+  to the new console so the coding agent can receive input and display output.
+- **Fresh location settings.** A late general settings response no longer
+  replaces a launcher location saved while that request was in flight.
+- **Codex npm detection.** Automatic detection prefers supported Windows
+  launchers such as codex.cmd over extensionless npm shell scripts.
 
 ## [0.3.0] - 2026-11-02
 
@@ -319,6 +328,8 @@ The initial release, published as **Eclyzer Bridge**.
 
 - **The app does not run in the background.** Closing the window exits it.
 
-[Unreleased]: https://github.com/hisyamnurx/Eclink/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/hisyamnurx/Eclink/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/hisyamnurx/Eclink/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/hisyamnurx/Eclink/releases/tag/v0.3.0
 [0.2.0]: https://github.com/hisyamnurx/Eclink/releases/tag/v0.2.0
 [0.1.0]: https://github.com/hisyamnurx/Eclink/releases/tag/v0.1.0
