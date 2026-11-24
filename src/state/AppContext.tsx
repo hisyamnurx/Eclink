@@ -247,7 +247,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
         language: patch.language,
       },
     });
-    setSettings(result);
+    // The response is a whole settings snapshot taken when the backend handled
+    // this request, so its `agentLocations` can predate a location saved while
+    // the request was in flight. Locations are only ever changed by
+    // `setAgentLocation`, which applies the backend's post-write map, so local
+    // state is the fresher copy: take the general preferences from the response
+    // and keep the locations this window already knows. Replacing the object
+    // wholesale used to restore a launcher path the user had just removed.
+    setSettings((current) =>
+      current ? { ...result, agentLocations: current.agentLocations } : result,
+    );
   }, []);
 
   /**

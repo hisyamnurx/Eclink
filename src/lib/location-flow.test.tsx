@@ -15,7 +15,13 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { setInvoke, type AgentSummary, type AgentLocation, type SettingsView } from "./api";
+import {
+  setInvoke,
+  type AgentSummary,
+  type AgentLocation,
+  type AppSettings,
+  type SettingsView,
+} from "./api";
 import { AppProvider, useApp } from "../state/AppContext";
 
 function summary(
@@ -80,14 +86,16 @@ describe("saving an install location", () => {
     agents: AgentSummary[];
     settings: SettingsView | null;
     setAgentLocation: (agent: string, location: AgentLocation | null) => Promise<void>;
+    /** Save a general preference, exactly as the Settings screen does. */
+    saveSettings: (patch: Partial<AppSettings>) => Promise<void>;
   }
   let probe: Probe | null = null;
 
   function mountProvider() {
     probe = null;
     function Capture() {
-      const { agents, settings, setAgentLocation } = useApp();
-      probe = { agents, settings, setAgentLocation };
+      const { agents, settings, setAgentLocation, saveSettings } = useApp();
+      probe = { agents, settings, setAgentLocation, saveSettings };
       return null;
     }
     act(() => {
@@ -312,6 +320,81 @@ describe("saving an install location", () => {
     );
     expect(probe!.agents.find((item) => item.agent === "claude")?.configuredLocation).toBe(
       claude.path,
+    );
+  });
+
+  it("keeps a saved location when a general settings response arrives late", async () => {
+    // `update_settings` replies with a whole settings snapshot taken when the
+    // backend handled it. A general preference saved before the location change
+    // is therefore answered with the old, empty location map. Applying that
+    // response wholesale restored a launcher path the user had just set (or
+    // removed). The general preference must still land; the location must not
+    // move backwards.
+    const codex: AgentLocation = { path: "D:\\Tools\\codex", kind: "folder" };
+    let releaseUpdate: (() => void) | undefined;
+
+    setInvoke((command, args) => {
+      const payload = (args ?? {}) as { patch?: Partial<AppSettings> };
+      switch (command) {
+        case "get_settings":
+          return Promise.resolve(baseSettings({ updateCheck: true }));
+        case "list_agents":
+          return Promise.resolve([summary("codex"), summary("claude"), summary("omp")]);
+        case "list_profiles":
+          return Promise.resolve([]);
+        case "set_agent_location":
+          return Promise.resolve({
+            agent: summary("codex", {
+              locationMode: codex.kind,
+              configuredLocation: codex.path,
+            }),
+            agentLocations: { codex },
+          });
+        case "update_settings":
+          return new Promise((resolve) => {
+            releaseUpdate = () =>
+              resolve({
+                // The stale snapshot: no saved locations, preference applied.
+                ...baseSettings({ updateCheck: payload.patch?.updateCheck ?? true }),
+                agentLocations: {},
+              });
+          });
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    mountProvider();
+    await settle();
+
+    // The general save starts first and is left in flight.
+    let generalSave: Promise<void> | undefined;
+    act(() => {
+      generalSave = probe!.saveSettings({ updateCheck: false });
+    });
+    expect(releaseUpdate, "update_settings was not called").toBeDefined();
+
+    // The location is saved and rendered while that response is still pending.
+    await act(async () => {
+      await probe!.setAgentLocation("codex", codex);
+    });
+    expect(probe!.settings?.agentLocations.codex).toEqual(codex);
+
+    // The old response now arrives.
+    await act(async () => {
+      releaseUpdate!();
+      await generalSave;
+    });
+
+    expect(
+      probe!.settings?.agentLocations.codex,
+      "the late response reverted the saved launcher location",
+    ).toEqual(codex);
+    expect(probe!.agents.find((item) => item.agent === "codex")?.configuredLocation).toBe(
+      codex.path,
+    );
+    expect(probe!.settings?.updateCheck, "the general preference must still be applied").toBe(
+      false,
     );
   });
 

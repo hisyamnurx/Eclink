@@ -355,18 +355,88 @@ pub struct SpawnPlan {
     pub new_console: bool,
 }
 
+/// How a launched host's standard streams are wired.
+///
+/// Split out of [`spawn`] so the decision is testable: getting it wrong is
+/// invisible at the call site but leaves the agent with no console to talk to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdioWiring {
+    /// The child inherits Eclink's own console streams.
+    ///
+    /// Used when Eclink itself was started from a terminal, so the agent's input
+    /// and output continue to work in the window the user is already looking at.
+    Inherit,
+    /// Do not pass standard handles at all; let Windows initialise them.
+    ///
+    /// Used for the PowerShell fallback, which is a console program created with
+    /// `CREATE_NEW_CONSOLE`, when Eclink has no console of its own (a normal GUI
+    /// launch, and the case this app ships). Because the child owns a new
+    /// console, Windows points its standard handles at that console's input and
+    /// output buffers, so the agent can read the keyboard and print output and
+    /// errors in its own window.
+    ///
+    /// Passing handles explicitly is what broke this: Eclink is a GUI process
+    /// with no console, so "inherit" handed the child handles that were
+    /// redirected or absent. Measured from a parent with no console, this wiring
+    /// gives `IsInputRedirected=False`, `IsOutputRedirected=False`, and
+    /// `IsErrorRedirected=False` in the child — real console handles.
+    Unset,
+    /// All three streams are `NUL`.
+    ///
+    /// Used for Windows Terminal, which is a GUI host: it opens its own window
+    /// and takes no input on its standard streams, so nothing should reach
+    /// Eclink's own (possibly absent) console.
+    Null,
+}
+
+/// Standard-stream wiring for a launch plan.
+///
+/// `parent_has_console` is whether Eclink was itself started from a terminal.
+pub fn stdio_wiring(new_console: bool, parent_has_console: bool) -> StdioWiring {
+    match (new_console, parent_has_console) {
+        // A console host that can see a console: keep using it.
+        (true, true) => StdioWiring::Inherit,
+        // A console host with none: let Windows wire its new console.
+        (true, false) => StdioWiring::Unset,
+        // A GUI host never uses the parent's streams.
+        (false, _) => StdioWiring::Null,
+    }
+}
+
+/// Whether Eclink itself has a console to hand down.
+fn parent_has_console() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdout().is_terminal()
+        || std::io::stderr().is_terminal()
+        || std::io::stdin().is_terminal()
+}
+
 /// Spawn the process described by `plan`.
 ///
 /// The child is detached from Bridge: closing Eclink must not kill the
 /// coding agent the user just opened (PRD §84).
 pub fn spawn(plan: &SpawnPlan) -> BridgeResult<u32> {
     let mut command = std::process::Command::new(&plan.program);
-    command
-        .args(&plan.args)
-        .current_dir(&plan.working_dir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+    command.args(&plan.args).current_dir(&plan.working_dir);
+
+    // A console host must own the console streams, or it has a window it cannot
+    // print in and a keyboard it cannot read. A GUI host takes none of them, so
+    // it gets `NUL` and can never inherit a handle Eclink does not have.
+    match stdio_wiring(plan.new_console, parent_has_console()) {
+        StdioWiring::Inherit => {
+            command
+                .stdin(Stdio::inherit())
+                .stdout(Stdio::inherit())
+                .stderr(Stdio::inherit());
+        }
+        StdioWiring::Unset => {}
+        StdioWiring::Null => {
+            command
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+        }
+    }
 
     for (key, value) in &plan.env {
         command.env(key, value);
@@ -720,6 +790,19 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_console_host_keeps_a_console_and_a_gui_host_never_does() {
+        // Windows Terminal opens its own window and must not inherit anything.
+        assert_eq!(stdio_wiring(false, true), StdioWiring::Null);
+        assert_eq!(stdio_wiring(false, false), StdioWiring::Null);
+        // The fallback keeps Eclink's console when there is one.
+        assert_eq!(stdio_wiring(true, true), StdioWiring::Inherit);
+        // Otherwise Windows must wire the child's new console itself. This is
+        // the shipped case: Eclink is a GUI process with no console, and
+        // inheriting "nothing" is what previously produced NUL handles.
+        assert_eq!(stdio_wiring(true, false), StdioWiring::Unset);
     }
 
     #[test]
