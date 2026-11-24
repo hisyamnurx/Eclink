@@ -91,7 +91,12 @@ A saved location replaces the `PATH` lookup for that agent only: it is what
 detection, version probing, Oh My Pi's `omp models --json` validation, and Launch
 all use. It never moves an agent's configuration, changes the active profile,
 copies files, or edits your `PATH`. Clearing it restores automatic detection, and
-the choice is stored in `app.json` so it survives a restart. OMP backups are sealed with Windows DPAPI because its provider
+the choice is stored in `app.json` so it survives a restart.
+
+A `.cmd`/`.bat` launcher, which is what npm and Bun installs create, is executed
+through `cmd.exe` with its path and arguments quoted once as one literal command
+line. A path that contains `%`, a double quote, or a control character cannot be
+passed that way and is refused with an explanation rather than guessed at. OMP backups are sealed with Windows DPAPI because its provider
 file may legitimately contain a literal key; Codex and Claude Code backups keep
 their existing redaction policy.
 

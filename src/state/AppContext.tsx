@@ -205,9 +205,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ? current.map((item) => (item.agent === result.agent.agent ? result.agent : item))
           : [...current, result.agent];
       });
-      setSettings((current) =>
-        current ? { ...current, agentLocations: result.agentLocations } : current,
-      );
+      // Merge only the agent this call changed. The response also carries the
+      // other agents' locations as they looked when the backend answered, and a
+      // response that arrives after a newer save must not put those older values
+      // back over the newer ones.
+      setSettings((current) => {
+        if (!current) return current;
+        const agentLocations = { ...current.agentLocations };
+        const saved = result.agentLocations[result.agent.agent];
+        if (saved) {
+          agentLocations[result.agent.agent] = saved;
+        } else {
+          delete agentLocations[result.agent.agent];
+        }
+        return { ...current, agentLocations };
+      });
     },
     [],
   );

@@ -89,6 +89,13 @@ both files back if it fails.
 space-separated values. Eclink passes argv directly, never a joined shell
 string.
 
+For a native `omp.exe` the profile and model stay separate argv entries in both
+terminal hosts. If a saved install location points at an `omp.cmd` shim, the
+command is carried to `cmd.exe` as one literal command line and transported
+through the terminal as an encoded PowerShell script, because Windows Terminal
+treats an apostrophe in a raw command line as a quote and Windows PowerShell 5.1
+mangles embedded quotes in native arguments.
+
 ## Profile names
 
 OMP accepts `^[a-z0-9][a-z0-9._-]{0,63}$`, excluding `default` (the reserved

@@ -20,19 +20,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is the executable used by detection, version probing, Oh My Pi's registry
   validation, and Launch. It does not move configuration, change profiles, copy
   files, or modify `PATH`.
-- **Windows shim support for probing.** A `.cmd`/`.bat` launcher (npm and Bun
-  installs) is now executed through `cmd.exe` for its version and registry
-  probes, with the path passed as one literal argument, so installs in folders
-  containing spaces, apostrophes, or non-ASCII characters resolve correctly.
+- **Windows shim support for probing and Launch.** A `.cmd`/`.bat` launcher
+  (npm and Bun installs) is executed through `cmd.exe` for its version and
+  registry probes, and Launch transports the same command line through the
+  terminal. The path and every argument are quoted once and handed to `cmd.exe`
+  as one raw command line, because it does not parse a command line the way Rust
+  quotes argv. Installs in folders containing spaces, apostrophes, or non-ASCII
+  characters now work; a path containing `%`, a double quote, or a control
+  character is refused with an explanation rather than run.
 
 ### Changed
 
 - **Detection probes are bounded.** Version and registry probes now share a
   timeout that kills the child process; a hung launcher is reported as a
-  timeout instead of blocking the interface.
+  timeout instead of blocking the interface. A process the batch file started
+  itself can outlive that timeout; this is a documented limit, not a guarantee.
 - **`app.json` schema version 2.** Adds optional `agentLocations`. A settings
   file from an earlier version loads unchanged and keeps automatic detection for
   every agent.
+- **Settings writes are serialised.** Concurrent updates can no longer each read
+  the same base and drop one another's field from `app.json`. A write that fails
+  leaves both the in-memory settings and the adapters' live view on the last
+  value that was actually stored.
 
 ### Fixed
 
@@ -41,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   not detected with the reason and a way back to automatic detection. Eclink no
   longer falls back to a different installation from `PATH` behind the user's
   back.
+- **Launch actually runs shims, in both terminal hosts.** Windows Terminal's
+  command-line parser treats an apostrophe as a quote, and Windows PowerShell
+  5.1 mangles embedded quotes in native arguments. A shim command is therefore
+  carried as an encoded PowerShell script, which contains no quotes, apostrophes,
+  or spaces. Launching a native launcher in the PowerShell fallback now also
+  gets a real console window instead of a detached process with nowhere to run.
 
 ## [0.3.0] - 2026-11-02
 

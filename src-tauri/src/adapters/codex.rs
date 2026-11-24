@@ -784,8 +784,11 @@ impl AgentAdapter for CodexAdapter {
     fn launch_argv(&self, project_dir: &Path) -> BridgeResult<LaunchPlan> {
         // One resolver for detection, version probing, and Launch: the file that
         // is launched is the file detection reported, including a saved location.
+        // `prepare` builds the shim command line once, with the same quoting the
+        // probes use.
         let launcher = self.launcher_for_launch()?;
-        crate::process::build_launch_plan(AgentId::Codex, launcher.path(), project_dir)
+        let command = launcher.prepare(&[])?;
+        crate::process::build_launch_plan_command(AgentId::Codex, &command, project_dir)
     }
 
     fn launch_env(&self, secret: Option<&str>) -> BridgeResult<Vec<(String, String)>> {

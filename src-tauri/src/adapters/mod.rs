@@ -414,6 +414,13 @@ pub struct LaunchPlan {
     pub working_dir: String,
     /// Human-readable command preview shown in the UI.
     pub display: String,
+    /// Whether the terminal host needs a real console window.
+    ///
+    /// Windows Terminal is a GUI process and is started detached; the PowerShell
+    /// fallback is a console program, and starting it without a console leaves it
+    /// with nowhere to run the agent or show its output.
+    #[serde(skip)]
+    pub new_console: bool,
 }
 
 /// Environment variables injected for the launched agent only.

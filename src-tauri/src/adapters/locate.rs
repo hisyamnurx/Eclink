@@ -205,9 +205,62 @@ pub enum LauncherKind {
     CommandShim,
 }
 
+/// A launcher prepared for execution.
+///
+/// For a native executable every argument is its own argv entry. For a shim the
+/// whole command is one piece of `cmd.exe` command-line text, built here and
+/// appended with `raw_arg`/`raw_arg`-equivalent, because `cmd.exe` does not parse
+/// its command line the way Rust's argv quoting assumes. Both forms are produced
+/// by [`Launcher::command`], so probing, registry validation, and Launch cannot
+/// drift apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentCommand {
+    /// Program to start: the launcher itself, or `cmd.exe` for a shim.
+    pub program: PathBuf,
+    /// Separate argv entries. Empty for a shim.
+    pub args: Vec<String>,
+    /// Exact text appended to `cmd.exe`'s command line, for a shim:
+    /// `/d /s /v:off /c ""C:\path" "arg""`.
+    pub raw_command_line: Option<String>,
+    /// The command text inside the `/c` quotes, for a shell that must transport
+    /// it as data (the PowerShell fallback does this through an environment
+    /// variable, because Windows PowerShell 5.1 mangles embedded quotes when it
+    /// passes a native argument).
+    pub command_text: Option<String>,
+    /// Human-readable preview for the UI preview. Contains no secret.
+    pub display: String,
+}
+
+impl AgentCommand {
+    /// Command line used by the PowerShell fallback, where the shim's command
+    /// text is carried in `ECLINK_AGENT_CMD` rather than as a native argument.
+    pub fn powershell_script(&self, working_dir: &str) -> Option<String> {
+        let text = self.command_text.as_deref()?;
+        Some(format!(
+            "Set-Location -LiteralPath {}; $env:ECLINK_AGENT_CMD = {}; & {} /d /s /v:off /c '%ECLINK_AGENT_CMD%'",
+            crate::process::powershell_literal(working_dir),
+            crate::process::powershell_literal(text),
+            crate::process::powershell_literal(&self.program.display().to_string()),
+        ))
+    }
+
+    /// The same script, encoded the way `powershell.exe -EncodedCommand` wants it.
+    ///
+    /// Base64 contains no quotes, apostrophes, or spaces, so the text can be
+    /// handed to Windows Terminal without its command-line parser rewriting any
+    /// part of it. That parser treats `'` as a quote and silently breaks a path
+    /// containing one, which is exactly what this encoding avoids.
+    pub fn powershell_encoded_script(&self, working_dir: &str) -> Option<String> {
+        use base64::Engine as _;
+        let script = self.powershell_script(working_dir)?;
+        let utf16: Vec<u8> = script.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        Some(base64::engine::general_purpose::STANDARD.encode(utf16))
+    }
+}
+
 impl Launcher {
     /// Classify a resolved path. Never fails; an unusable shim fails at
-    /// [`Self::check_executable`] or at the probe.
+    /// [`Self::check_executable`] or when a command is built.
     pub fn from_path(path: PathBuf) -> Self {
         let kind = match path
             .extension()
@@ -230,58 +283,99 @@ impl Launcher {
     }
 
     /// Whether Eclink can execute this launcher safely.
-    ///
-    /// A `.cmd`/`.bat` runs through `cmd.exe`, which expands `%NAME%` before it
-    /// runs the file. A path containing `%` would therefore be rewritten into
-    /// something else, so it is refused rather than guessed at. A double quote is
-    /// refused for the same reason; Windows does not allow it in a real path, but
-    /// a hand-edited `app.json` is not a real path.
     pub fn check_executable(&self) -> Result<(), String> {
-        if self.kind != LauncherKind::CommandShim {
-            return Ok(());
-        }
-        let text = self.path.to_string_lossy();
-        if text.contains('%') {
-            return Err(
-                "A .cmd or .bat launcher cannot be used from a path containing %, because the \
-                 Windows command interpreter would expand it. Choose the installation folder or \
-                 the .exe file instead."
-                    .to_string(),
-            );
-        }
-        if text.contains('"') {
-            return Err("A .cmd or .bat launcher path cannot contain a double quote.".to_string());
-        }
-        Ok(())
+        self.command(&[]).map(|_| ())
     }
 
-    /// Program and argv used to execute the launcher with `args`.
+    /// Build the execution form used by probes, OMP registry validation, and
+    /// Launch.
     ///
-    /// The path is always one argv entry; nothing is joined into a free-form
-    /// command line. `call` is required for a batch file so `cmd.exe` runs it
-    /// with the remaining arguments instead of parsing the quoted path as part of
-    /// its own `/c` command string.
-    pub fn invocation(&self, args: &[&str]) -> (PathBuf, Vec<String>) {
+    /// A shim is executed as `cmd.exe /d /s /v:off /c ""<path>" "<arg>"...`.
+    /// Every component is quoted once, and the whole command is appended as one
+    /// raw string, so Windows never re-interprets a space, `&`, `|`, `<`, `>`,
+    /// `(`, `)`, `^`, or an apostrophe as syntax. `%` is refused because
+    /// `cmd.exe` expands `%NAME%` even inside quotes, and a double quote is
+    /// refused because it would end the literal.
+    pub fn command(&self, args: &[&str]) -> Result<AgentCommand, String> {
         match self.kind {
-            LauncherKind::Native => (
-                self.path.clone(),
-                args.iter().map(|arg| arg.to_string()).collect(),
-            ),
+            LauncherKind::Native => {
+                let display = if args.is_empty() {
+                    self.path.display().to_string()
+                } else {
+                    format!("{} {}", self.path.display(), args.join(" "))
+                };
+                Ok(AgentCommand {
+                    program: self.path.clone(),
+                    args: args.iter().map(|arg| arg.to_string()).collect(),
+                    raw_command_line: None,
+                    command_text: None,
+                    display,
+                })
+            }
             LauncherKind::CommandShim => {
-                let interpreter = std::env::var_os("ComSpec")
-                    .map(PathBuf::from)
-                    .unwrap_or_else(|| PathBuf::from("cmd.exe"));
-                let mut argv = vec![
-                    "/d".to_string(),
-                    "/c".to_string(),
-                    "call".to_string(),
-                    self.path.to_string_lossy().into_owned(),
-                ];
-                argv.extend(args.iter().map(|arg| arg.to_string()));
-                (interpreter, argv)
+                let path = self.path.to_string_lossy().into_owned();
+                check_shim_data("path", &path)?;
+                let mut parts = Vec::with_capacity(args.len() + 1);
+                parts.push(format!("\"{path}\""));
+                for arg in args {
+                    check_shim_data("argument", arg)?;
+                    parts.push(format!("\"{arg}\""));
+                }
+                let command_text = parts.join(" ");
+                let raw_command_line = format!("/d /s /v:off /c \"{command_text}\"");
+                Ok(AgentCommand {
+                    program: command_interpreter(),
+                    args: Vec::new(),
+                    display: format!("cmd.exe {raw_command_line}"),
+                    raw_command_line: Some(raw_command_line),
+                    command_text: Some(command_text),
+                })
             }
         }
     }
+}
+
+/// `cmd.exe` to use, honouring `ComSpec` so a redirected interpreter works.
+pub fn command_interpreter() -> PathBuf {
+    std::env::var_os("ComSpec")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("cmd.exe"))
+}
+
+impl Launcher {
+    /// [`Self::command`] with the standard, actionable hint attached.
+    pub fn prepare(&self, args: &[&str]) -> BridgeResult<AgentCommand> {
+        self.command(args).map_err(|reason| {
+            BridgeError::validation(reason).with_hint(
+                "Choose the installation folder or the .exe file, which does not need cmd.exe.",
+            )
+        })
+    }
+}
+
+/// Refuse data `cmd.exe` cannot treat as one quoted literal.
+fn check_shim_data(what: &str, value: &str) -> Result<(), String> {
+    if let Some(ch) = value.chars().find(|ch| ch.is_control()) {
+        return Err(format!(
+            "A .cmd or .bat {what} contains a control character (U+{:04X}), which Eclink cannot \
+             pass to the Windows command interpreter safely. Choose the installation folder or \
+             the .exe file instead.",
+            ch as u32
+        ));
+    }
+    if value.contains('"') {
+        return Err(format!(
+            "A .cmd or .bat {what} contains a double quote, which cannot be passed as one \
+             literal. Choose the installation folder or the .exe file instead."
+        ));
+    }
+    if value.contains('%') {
+        return Err(format!(
+            "A .cmd or .bat {what} contains %, because the Windows command interpreter expands \
+             %NAME% even inside quotes. Choose the installation folder or the .exe file instead."
+        ));
+    }
+    Ok(())
 }
 
 /// What resolution concluded for one agent.
@@ -897,5 +991,88 @@ mod tests {
             "automatic detection used to ignore the probe result"
         );
         assert!(detection.location_problem.is_none());
+    }
+
+    #[test]
+    fn a_shim_command_is_one_raw_literal_command_line() {
+        // Windows does not parse cmd.exe's command line with Rust's argv rules.
+        // Everything must therefore be quoted once and handed over as one raw
+        // string, including the path and every argument.
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = write_launcher(
+            &dir.path().join("Program Files O'Brien Ünïcødé & Sons"),
+            "codex.cmd",
+        );
+
+        let command = Launcher::from_path(launcher.clone())
+            .command(&["--version", "--model", "p/m"])
+            .unwrap();
+
+        let raw = command.raw_command_line.expect("a shim is a raw line");
+        assert!(raw.starts_with("/d /s /v:off /c \"\""), "{raw}");
+        assert!(
+            raw.contains(&format!("\"{}\"", launcher.display())),
+            "the path must be one quoted literal: {raw}"
+        );
+        assert!(raw.contains("\"--version\""), "{raw}");
+        assert!(raw.contains("\"--model\" \"p/m\""), "{raw}");
+        assert!(
+            command.args.is_empty(),
+            "no argv may reach cmd.exe directly"
+        );
+        assert!(raw.ends_with('"'), "{raw}");
+        // Case/argument preservation: nothing was split or normalised.
+        assert!(raw.contains("O'Brien"), "{raw}");
+        assert!(raw.contains("Ünïcødé"), "{raw}");
+        assert!(raw.contains('&'), "& is data inside the quotes: {raw}");
+    }
+
+    #[test]
+    fn a_shim_command_refuses_data_that_cannot_be_a_literal() {
+        // These paths are never created: the refusal is about the text, which a
+        // hand-edited app.json or an argument can contain just as well.
+        let percent = Launcher::from_path(PathBuf::from(r"C:\Tools\100% codex.cmd"));
+        let error = percent.command(&[]).unwrap_err();
+        assert!(error.contains('%'), "{error}");
+
+        let quoted = Launcher::from_path(PathBuf::from("C:\\Tools\\bad\"name.cmd"));
+        let error = quoted.command(&[]).unwrap_err();
+        assert!(error.contains("double quote"), "{error}");
+
+        let plain = Launcher::from_path(PathBuf::from(r"C:\Tools\codex.cmd"));
+        let error = plain.command(&["bad\narg"]).unwrap_err();
+        assert!(error.contains("control character"), "{error}");
+    }
+
+    #[test]
+    fn a_native_command_keeps_separate_argv_and_no_raw_text() {
+        let command = Launcher::from_path(PathBuf::from(r"C:\Tools\codex.exe"))
+            .command(&["--version"])
+            .unwrap();
+
+        assert_eq!(command.program, PathBuf::from(r"C:\Tools\codex.exe"));
+        assert_eq!(command.args, ["--version"]);
+        assert!(command.raw_command_line.is_none());
+        assert!(command.command_text.is_none());
+    }
+
+    #[test]
+    fn the_powershell_fallback_script_carries_the_shim_as_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let launcher = write_launcher(&dir.path().join("codex O'Brien"), "codex.cmd");
+        let command = Launcher::from_path(launcher)
+            .command(&["--version"])
+            .unwrap();
+
+        let script = command
+            .powershell_script(r"C:\My Project\O'Brien")
+            .expect("a shim has a script");
+
+        // Both the working directory and the command text are PowerShell
+        // literals, so an apostrophe is doubled and nothing is expanded.
+        assert!(script.contains(r"'C:\My Project\O''Brien'"), "{script}");
+        assert!(script.contains("$env:ECLINK_AGENT_CMD"), "{script}");
+        assert!(script.contains("'%ECLINK_AGENT_CMD%'"), "{script}");
+        assert!(script.contains("/d /s /v:off /c"), "{script}");
     }
 }

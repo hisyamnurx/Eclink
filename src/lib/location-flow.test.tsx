@@ -235,6 +235,86 @@ describe("saving an install location", () => {
     expect(probe!.agents[0]?.configuredLocation).toBe("D:\\Tools\\Claude O'Brien");
   });
 
+  it("does not let a late response overwrite another agent's newer location", async () => {
+    // Two saves overlap. Each response carries the location map as the backend
+    // saw it when that request started, so neither includes the other agent's
+    // new value. Applying a response wholesale would drop the newer choice.
+    const pending: Array<{
+      agent: AgentSummary["agent"];
+      location: AgentLocation | null;
+      release: () => void;
+    }> = [];
+
+    setInvoke((command, args) => {
+      const payload = (args ?? {}) as {
+        agent?: AgentSummary["agent"];
+        location?: AgentLocation | null;
+      };
+      switch (command) {
+        case "get_settings":
+          return Promise.resolve(baseSettings());
+        case "list_agents":
+          return Promise.resolve([summary("codex"), summary("claude"), summary("omp")]);
+        case "list_profiles":
+          return Promise.resolve([]);
+        case "set_agent_location": {
+          const agent = payload.agent!;
+          const location = payload.location ?? null;
+          return new Promise((resolve) => {
+            pending.push({
+              agent,
+              location,
+              release: () => {
+                resolve({
+                  agent: summary(agent, {
+                    installed: Boolean(location),
+                    locationMode: location ? location.kind : "automatic",
+                    configuredLocation: location?.path,
+                  }),
+                  // Deliberately only this agent: that is a stale snapshot.
+                  agentLocations: location ? { [agent]: location } : {},
+                });
+              },
+            });
+          });
+        }
+        default:
+          return Promise.resolve(null);
+      }
+    });
+
+    mountProvider();
+    await settle();
+
+    const codex: AgentLocation = { path: "D:\\Tools\\codex", kind: "folder" };
+    const claude: AgentLocation = { path: "D:\\Tools\\claude", kind: "folder" };
+    let codexSave: Promise<void> | undefined;
+    let claudeSave: Promise<void> | undefined;
+
+    act(() => {
+      codexSave = probe!.setAgentLocation("codex", codex);
+      claudeSave = probe!.setAgentLocation("claude", claude);
+    });
+    expect(pending).toHaveLength(2);
+
+    // The newer save (Claude) answers first; the stale Codex response arrives
+    // afterwards without Claude's entry.
+    act(() => pending[1]!.release());
+    act(() => pending[0]!.release());
+    await act(async () => {
+      await Promise.all([codexSave!, claudeSave!]);
+    });
+
+    expect(probe!.settings?.agentLocations.codex).toEqual(codex);
+    expect(probe!.settings?.agentLocations.claude).toEqual(claude);
+    expect(probe!.agents.find((item) => item.agent === "codex")?.configuredLocation).toBe(
+      codex.path,
+    );
+    expect(probe!.agents.find((item) => item.agent === "claude")?.configuredLocation).toBe(
+      claude.path,
+    );
+  });
+
   it("leaves the list and the saved locations untouched when the save fails", async () => {
     installFakeBackend({ failSave: true });
     mountProvider();

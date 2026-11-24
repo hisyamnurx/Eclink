@@ -22,6 +22,7 @@ use eclink_lib::adapters::{
 use eclink_lib::app::AppState;
 use eclink_lib::backup::BackupManager;
 use eclink_lib::paths::AppPaths;
+use eclink_lib::process::strip_verbatim_prefix;
 
 /// Create a `.cmd` shim that prints `line` and nothing else on stdout.
 ///
@@ -261,8 +262,9 @@ fn one_agents_broken_location_does_not_affect_another() {
 
 #[test]
 fn launch_uses_the_saved_launcher() {
-    // Detection, probing, and Launch must name the same file. The plan is built
-    // without starting a terminal, so the assertion is on the argv it would run.
+    // Detection, probing, and Launch must name the same file. A shim is carried
+    // as one raw cmd.exe command line, not as argv entries, so that is what the
+    // plan has to contain.
     let dir = tempfile::tempdir().unwrap();
     let launcher = shim(
         &dir.path().join("codex bin"),
@@ -283,16 +285,24 @@ fn launch_uses_the_saved_launcher() {
     let plan = adapter.launch_argv(&project).unwrap();
 
     assert!(
-        plan.args
-            .iter()
-            .any(|arg| arg.contains("codex bin") && arg.contains("codex.cmd")),
-        "the saved launcher must appear in argv: {:?}",
-        plan.args
-    );
-    assert!(
         plan.display.contains(&launcher.display().to_string()),
         "the preview must show the saved launcher: {}",
         plan.display
+    );
+    assert!(
+        plan.args.iter().any(|arg| arg == "-EncodedCommand"),
+        "a shim must be transported as an encoded script: {:?}",
+        plan.args
+    );
+    assert_eq!(
+        plan.working_dir,
+        project
+            .canonicalize()
+            .map(strip_verbatim_prefix)
+            .unwrap()
+            .display()
+            .to_string(),
+        "the agent starts in the project folder, not the install folder"
     );
 }
 
@@ -312,24 +322,31 @@ fn oh_my_pi_launch_keeps_profile_arguments_with_a_saved_launcher() {
 
     let plan = adapter.launch_argv(&project).unwrap();
 
-    // Windows Terminal receives `--profile` and `work` as two argv entries;
-    // the PowerShell fallback embeds them, quoted, in its script. Both must name
-    // the same profile and the saved launcher.
-    let joined = plan.args.join(" ");
+    // The shim receives both arguments as quoted literals inside the command
+    // text; the transport is base64 so no terminal parser can rewrite them.
     assert!(
-        joined.contains("--profile") && joined.contains("work"),
-        "the profile arguments were dropped: {:?}",
-        plan.args
-    );
-    assert!(
-        plan.display.contains("--profile work"),
-        "the preview must show the profile arguments: {}",
+        plan.display.contains("\"--profile\" \"work\""),
+        "the profile arguments were dropped or re-quoted: {}",
         plan.display
     );
     assert!(
-        joined.contains("omp.cmd"),
-        "the saved launcher must appear in argv: {:?}",
+        plan.display.contains(&launcher.display().to_string()),
+        "the saved launcher must be one quoted literal: {}",
+        plan.display
+    );
+    assert!(
+        plan.args.iter().any(|arg| arg == "-EncodedCommand"),
+        "a shim must be transported as an encoded script: {:?}",
         plan.args
+    );
+    assert_eq!(
+        plan.working_dir,
+        project
+            .canonicalize()
+            .map(strip_verbatim_prefix)
+            .unwrap()
+            .display()
+            .to_string()
     );
 }
 
@@ -373,6 +390,100 @@ fn locations_persist_per_agent_across_a_restart() {
     assert!(after.agent_locations.codex.is_none());
     assert!(after.agent_locations.omp.is_some(), "OMP must be kept");
     assert_eq!(after.language, "id");
+}
+
+#[test]
+fn concurrent_agent_location_changes_are_serialised() {
+    // Two settings updates that overlap must not lose each other's field. Before
+    // the settings cycle was serialised, both could read the same base state and
+    // the second write would drop the first agent's choice from app.json.
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::with_root(dir.path());
+    let state = AppState::with_paths(paths.clone()).unwrap();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(3));
+
+    std::thread::scope(|scope| {
+        for (agent, location) in [
+            (
+                AgentId::Codex,
+                AgentLocation::new(r"D:\Tools\codex", LocationKind::Folder),
+            ),
+            (
+                AgentId::Claude,
+                AgentLocation::new(r"D:\Tools\claude", LocationKind::Folder),
+            ),
+        ] {
+            let state = state.clone();
+            let barrier = barrier.clone();
+            scope.spawn(move || {
+                barrier.wait();
+                state
+                    .set_agent_location(agent, Some(location))
+                    .expect("a serialised update must succeed");
+            });
+        }
+        barrier.wait();
+    });
+
+    let in_memory = state.settings();
+    assert!(in_memory.agent_locations.codex.is_some());
+    assert!(in_memory.agent_locations.claude.is_some());
+
+    let reloaded = AppState::with_paths(paths).unwrap().settings();
+    assert!(
+        reloaded.agent_locations.codex.is_some(),
+        "the first update was lost from disk"
+    );
+    assert!(
+        reloaded.agent_locations.claude.is_some(),
+        "the second update was lost from disk"
+    );
+}
+
+#[test]
+fn a_failed_settings_write_keeps_the_last_saved_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::with_root(dir.path());
+    let state = AppState::with_paths(paths.clone()).unwrap();
+    let codex = AgentLocation::new(r"D:\Tools\codex", LocationKind::Folder);
+    state
+        .set_agent_location(AgentId::Codex, Some(codex.clone()))
+        .unwrap();
+    state
+        .update_settings(|settings| settings.language = "id".to_string())
+        .unwrap();
+
+    // Make the atomic replace fail by putting a directory where app.json goes.
+    let app_json = paths.app_json();
+    let saved = std::fs::read(&app_json).unwrap();
+    std::fs::remove_file(&app_json).unwrap();
+    std::fs::create_dir(&app_json).unwrap();
+
+    let result = state.set_agent_location(
+        AgentId::Claude,
+        Some(AgentLocation::new(r"D:\Tools\claude", LocationKind::Folder)),
+    );
+
+    assert!(result.is_err(), "the write cannot have succeeded");
+    let in_memory = state.settings();
+    assert!(
+        in_memory.agent_locations.claude.is_none(),
+        "a failed write must not appear in memory"
+    );
+    assert_eq!(in_memory.agent_locations.codex, Some(codex));
+    assert_eq!(in_memory.language, "id", "other settings are untouched");
+    assert!(
+        state.agent_locations().claude.is_none(),
+        "the adapters must keep seeing the last saved value"
+    );
+
+    // Once the conflict is gone, the file is still the last successful state.
+    std::fs::remove_dir(&app_json).unwrap();
+    std::fs::write(&app_json, &saved).unwrap();
+    let reloaded = AppState::with_paths(paths).unwrap().settings();
+    assert!(reloaded.agent_locations.claude.is_none());
+    assert!(reloaded.agent_locations.codex.is_some());
+    assert_eq!(reloaded.language, "id");
 }
 
 #[test]

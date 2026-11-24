@@ -266,10 +266,25 @@ pub async fn probe_launcher_with_timeout(
     env: &[(String, String)],
     timeout: Duration,
 ) -> Result<String, ProbeError> {
-    let (program, argv) = launcher.invocation(args);
-    let mut command = Command::new(&program);
+    let prepared = launcher.command(args).map_err(ProbeError::Unavailable)?;
+    let mut command = Command::new(&prepared.program);
+    match prepared.raw_command_line.as_deref() {
+        Some(raw) => {
+            #[cfg(windows)]
+            command.raw_arg(raw);
+            #[cfg(not(windows))]
+            {
+                let _ = raw;
+                return Err(ProbeError::Unavailable(
+                    "Windows command shims are not supported on this platform.".to_string(),
+                ));
+            }
+        }
+        None => {
+            command.args(&prepared.args);
+        }
+    }
     command
-        .args(&argv)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -441,22 +456,27 @@ mod tests {
         let version = version_of_launcher(&launcher).await.unwrap();
 
         assert_eq!(version, "9.9.9");
-        // The invocation must name the shim once and keep it as one argv entry.
-        let (program, argv) = launcher.invocation(&["--version"]);
+        // The command must name the shim once, quote it once, and hand the whole
+        // thing to cmd.exe as one raw command line rather than as Rust argv.
+        let prepared = launcher.command(&["--version"]).unwrap();
         assert!(
-            program
+            prepared
+                .program
                 .to_string_lossy()
                 .to_ascii_lowercase()
                 .ends_with("cmd.exe"),
             "a shim must run through cmd.exe, got {}",
-            program.display()
+            prepared.program.display()
         );
-        assert_eq!(argv[..3], ["/d", "/c", "call"], "argv: {argv:?}");
-        assert_eq!(
-            argv[3],
-            shim.display().to_string(),
-            "the shim path is one entry and is not split: {argv:?}"
+        assert!(prepared.args.is_empty(), "a shim carries no separate argv");
+        let raw = prepared.raw_command_line.unwrap();
+        assert!(raw.starts_with("/d /s /v:off /c \"\""), "raw: {raw}");
+        assert!(
+            raw.contains(&format!("\"{}\"", shim.display())),
+            "the shim path is one quoted literal: {raw}"
         );
+        assert!(raw.contains("\"--version\""), "raw: {raw}");
+        assert!(raw.ends_with('"'), "the /c command is closed: {raw}");
     }
 
     #[tokio::test]
@@ -510,9 +530,10 @@ mod tests {
             .map(PathBuf::from)
             .unwrap_or_else(|| PathBuf::from("cmd.exe"));
         let launcher = Launcher::from_path(comspec);
-        let (program, argv) = launcher.invocation(&["/c", "exit", "0"]);
+        let prepared = launcher.command(&["/c", "exit", "0"]).unwrap();
 
-        assert_eq!(program, launcher.path());
-        assert_eq!(argv, ["/c", "exit", "0"]);
+        assert_eq!(prepared.program, launcher.path());
+        assert_eq!(prepared.args, ["/c", "exit", "0"]);
+        assert!(prepared.raw_command_line.is_none());
     }
 }

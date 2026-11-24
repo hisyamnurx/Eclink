@@ -1234,6 +1234,31 @@ fn probe_error(agent: &str, error: &ProbeError) -> BridgeError {
     bridge
 }
 
+/// Arguments OMP receives at Launch.
+///
+/// Kept separate from `launch_argv` so the profile/model contract can be tested
+/// without reading the user's OMP configuration from disk. Both values stay
+/// separate argv entries for a native launcher and separate quoted literals for
+/// a shim, so a selector can never become shell syntax.
+fn launch_arguments(profile: &str, config: Option<&ActiveConfiguration>) -> Vec<String> {
+    let mut extra = Vec::new();
+    if profile != DEFAULT_PROFILE {
+        extra.push("--profile".to_string());
+        extra.push(profile.to_string());
+    }
+    if let Some(config) = config {
+        if config.kind == crate::adapters::ActiveConfigurationKind::Managed {
+            if let (Some(provider), Some(model)) =
+                (config.provider_id.clone(), config.model.clone())
+            {
+                extra.push("--model".to_string());
+                extra.push(format!("{provider}/{model}"));
+            }
+        }
+    }
+    extra
+}
+
 impl AgentAdapter for OmpAdapter {
     fn id(&self) -> AgentId {
         AgentId::Omp
@@ -1691,25 +1716,11 @@ impl AgentAdapter for OmpAdapter {
         // that is launched is the one Eclink reported and validated.
         let launcher = self.launcher_for_launch()?;
         let paths = self.paths()?;
-        let mut extra = Vec::new();
-        if paths.profile != DEFAULT_PROFILE {
-            extra.push("--profile".to_string());
-            extra.push(paths.profile.clone());
-        }
-        if let Ok(config) = self.get_active_profile() {
-            if config.kind == crate::adapters::ActiveConfigurationKind::Managed {
-                if let (Some(provider), Some(model)) = (config.provider_id, config.model) {
-                    extra.push("--model".to_string());
-                    extra.push(format!("{provider}/{model}"));
-                }
-            }
-        }
-        crate::process::build_launch_plan_with_args(
-            AgentId::Omp,
-            launcher.path(),
-            project_dir,
-            &extra,
-        )
+        let active = self.get_active_profile().ok();
+        let extra = launch_arguments(&paths.profile, active.as_ref());
+        let refs: Vec<&str> = extra.iter().map(String::as_str).collect();
+        let command = launcher.prepare(&refs)?;
+        crate::process::build_launch_plan_command(AgentId::Omp, &command, project_dir)
     }
 
     fn launch_env(&self, _secret: Option<&str>) -> Result<Vec<(String, String)>, BridgeError> {
@@ -1984,6 +1995,35 @@ mod tests {
         let logged = std::fs::read_to_string(&marker).unwrap();
         assert!(logged.contains("models"), "argv was: {logged}");
         assert!(logged.contains("--json"), "argv was: {logged}");
+    }
+
+    #[test]
+    fn launch_arguments_keep_profile_and_model_separate() {
+        let managed = ActiveConfiguration {
+            kind: crate::adapters::ActiveConfigurationKind::Managed,
+            profile_id: Some("p".into()),
+            profile_name: Some("P".into()),
+            label: "P".into(),
+            provider_id: Some("prov".into()),
+            model: Some("model:qa".into()),
+        };
+
+        assert_eq!(
+            launch_arguments("work", Some(&managed)),
+            ["--profile", "work", "--model", "prov/model:qa"]
+        );
+        assert_eq!(
+            launch_arguments("default", Some(&managed)),
+            ["--model", "prov/model:qa"]
+        );
+        assert!(launch_arguments("default", None).is_empty());
+
+        let stock = ActiveConfiguration::default_config("Oh My Pi Default");
+        assert_eq!(
+            launch_arguments("work", Some(&stock)),
+            ["--profile", "work"],
+            "an unmanaged configuration must not invent a model argument"
+        );
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::adapters::{
 };
 use crate::backup::BackupManager;
 use crate::diagnostics::{LogGuard, LogLevel};
-use crate::error::BridgeResult;
+use crate::error::{BridgeError, BridgeResult};
 use crate::paths::AppPaths;
 use crate::profiles::ProfileStore;
 use crate::secrets::SecretStore;
@@ -33,6 +33,11 @@ struct AppStateInner {
     /// Settings takes effect on the next detection without a restart.
     locations: LocationStore,
     settings: std::sync::RwLock<AppSettings>,
+    /// Serialises the read-modify-write-persist cycle for `app.json`. Without
+    /// this, two concurrent updates can each read the same base state and the
+    /// later write silently drops the other's field, leaving the file and the
+    /// in-memory value different.
+    settings_update: std::sync::Mutex<()>,
     /// Held for the process lifetime so the log flusher stays alive.
     _log_guard: std::sync::Mutex<Option<LogGuard>>,
 }
@@ -204,6 +209,7 @@ impl AppState {
                 locations,
                 paths,
                 settings: std::sync::RwLock::new(settings),
+                settings_update: std::sync::Mutex::new(()),
                 _log_guard: std::sync::Mutex::new(log_guard),
             }),
         })
@@ -289,36 +295,72 @@ impl AppState {
 
     /// Save or clear one agent's install location.
     ///
-    /// `app.json` is written first and the live store is updated only after that
-    /// succeeds. A failed write therefore leaves the running process on the
-    /// location it actually has on disk, rather than on one that would disappear
-    /// at the next launch. Other agents and every other setting are untouched.
+    /// The whole read-modify-write cycle is serialised with every other settings
+    /// update. `app.json` is written first; only after that succeeds do the
+    /// in-memory settings and the adapters' live view change. A failed write
+    /// therefore leaves all three on the last value that was stored.
     pub fn set_agent_location(
         &self,
         agent: AgentId,
         location: Option<AgentLocation>,
     ) -> BridgeResult<AgentLocations> {
-        let persisted = location.clone();
-        self.update_settings(move |settings| {
-            settings.agent_locations.set(agent, persisted);
-        })?;
+        let _guard = self.lock_settings()?;
+        let mut updated = self.settings();
+        updated.agent_locations.set(agent, location.clone());
+        self.persist_settings(&updated)?;
+        self.replace_settings(updated.clone());
         self.inner.locations.set(agent, location);
-        Ok(self.agent_locations())
+        Ok(updated.agent_locations)
     }
 
     /// Replace settings and persist them.
+    ///
+    /// Serialised by [`Self::lock_settings`] so two concurrent updates cannot
+    /// both start from the same base and overwrite each other's field. Memory is
+    /// committed only after the file write succeeds, so a failed write leaves
+    /// the running process on the value that is actually on disk.
     pub fn update_settings<F>(&self, mutate: F) -> BridgeResult<AppSettings>
     where
         F: FnOnce(&mut AppSettings),
     {
-        let updated = {
-            let mut guard = self.inner.settings.write().map_err(|_| {
-                crate::error::BridgeError::internal("Application settings are unavailable.")
-            })?;
-            mutate(&mut guard);
-            guard.clone()
-        };
-        crate::state::save_settings(&self.inner.paths, &updated)?;
+        let _guard = self.lock_settings()?;
+        let mut updated = self.settings();
+        mutate(&mut updated);
+        self.persist_settings(&updated)?;
+        self.replace_settings(updated.clone());
         Ok(updated)
+    }
+
+    /// Acquire the settings write lock, mapping poisoning to an error rather
+    /// than risking a half-applied update.
+    fn lock_settings(&self) -> BridgeResult<std::sync::MutexGuard<'_, ()>> {
+        self.inner.settings_update.lock().map_err(|_| {
+            BridgeError::internal("Application settings could not be updated.").with_hint(
+                "A previous settings change failed unexpectedly. Restart Eclink and try again.",
+            )
+        })
+    }
+
+    fn persist_settings(&self, settings: &AppSettings) -> BridgeResult<()> {
+        let mut to_write = settings.clone();
+        to_write.schema_version = crate::state::APP_SETTINGS_SCHEMA_VERSION;
+        crate::state::save_settings(&self.inner.paths, &to_write)
+    }
+
+    /// Commit a settings value to memory.
+    ///
+    /// A poisoned reader lock is recovered rather than aborting: the value being
+    /// committed is the one already written to disk, which is authoritative.
+    fn replace_settings(&self, settings: AppSettings) {
+        let mut to_store = settings;
+        to_store.schema_version = crate::state::APP_SETTINGS_SCHEMA_VERSION;
+        let mut guard = match self.inner.settings.write() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                tracing::warn!(target: "eclink", "settings lock was poisoned; recovering");
+                poisoned.into_inner()
+            }
+        };
+        *guard = to_store;
     }
 }

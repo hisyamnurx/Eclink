@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
+use crate::adapters::locate::{AgentCommand, Launcher};
 use crate::adapters::{AgentId, LaunchPlan};
 use crate::error::{BridgeError, BridgeResult};
 /// Windows Terminal, preferred when present (PRD §32.2).
@@ -84,46 +85,47 @@ pub enum TerminalKind {
 
 /// Build the launch plan for `agent` in `project_dir`.
 ///
-/// The returned argv is fully explicit; nothing is shell-interpreted.
+/// The returned argv is fully explicit; nothing is shell-interpreted. A
+/// `.cmd`/`.bat` launcher becomes a `cmd.exe` command built by
+/// [`Launcher::command`], the same builder probes and registry validation use.
 pub fn build_launch_plan(
     agent: AgentId,
     agent_executable: &Path,
     project_dir: &Path,
 ) -> BridgeResult<LaunchPlan> {
-    let (terminal, is_wt) = resolve_terminal();
-    let kind = if is_wt {
-        TerminalKind::WindowsTerminal
-    } else {
-        TerminalKind::PowerShell
-    };
-    build_launch_plan_for(agent, agent_executable, project_dir, kind, &terminal)
+    let command = launcher_command(agent_executable, &[])?;
+    build_launch_plan_command(agent, &command, project_dir)
 }
 
 /// Build a launch plan with agent arguments (for example OMP's `--profile`).
 ///
-/// The arguments are separate argv entries for Windows Terminal and are quoted
-/// as PowerShell literals in the fallback. They are never concatenated into a
-/// shell command without quoting, so a model selector cannot become a command.
+/// For a native executable the arguments stay separate argv entries. For a
+/// shim they are quoted once each and appended to one raw command line, so
+/// `cmd.exe` receives them as literals rather than as Rust-quoted argv.
 pub fn build_launch_plan_with_args(
     agent: AgentId,
     agent_executable: &Path,
     project_dir: &Path,
     agent_args: &[String],
 ) -> BridgeResult<LaunchPlan> {
+    let refs: Vec<&str> = agent_args.iter().map(String::as_str).collect();
+    let command = launcher_command(agent_executable, &refs)?;
+    build_launch_plan_command(agent, &command, project_dir)
+}
+
+/// Build a launch plan for an already-prepared [`AgentCommand`].
+pub fn build_launch_plan_command(
+    agent: AgentId,
+    command: &AgentCommand,
+    project_dir: &Path,
+) -> BridgeResult<LaunchPlan> {
     let (terminal, is_wt) = resolve_terminal();
     let kind = if is_wt {
         TerminalKind::WindowsTerminal
     } else {
         TerminalKind::PowerShell
     };
-    build_launch_plan_with_args_for(
-        agent,
-        agent_executable,
-        project_dir,
-        agent_args,
-        kind,
-        &terminal,
-    )
+    build_launch_plan_for_command(agent, command, project_dir, kind, &terminal)
 }
 
 /// Build a launch plan for an explicitly chosen terminal host.
@@ -137,21 +139,21 @@ pub fn build_launch_plan_for(
     kind: TerminalKind,
     terminal: &Path,
 ) -> BridgeResult<LaunchPlan> {
-    build_launch_plan_with_args_for(agent, agent_executable, project_dir, &[], kind, terminal)
+    let command = launcher_command(agent_executable, &[])?;
+    build_launch_plan_for_command(agent, &command, project_dir, kind, terminal)
 }
 
-fn build_launch_plan_with_args_for(
+/// Build a launch plan for an explicit command and terminal host.
+pub fn build_launch_plan_for_command(
     agent: AgentId,
-    agent_executable: &Path,
+    command: &AgentCommand,
     project_dir: &Path,
-    agent_args: &[String],
     kind: TerminalKind,
     terminal: &Path,
 ) -> BridgeResult<LaunchPlan> {
     let working_dir = normalize_project_dir(project_dir)?;
     let workdir_str = working_dir.display().to_string();
-    let exe_str = agent_executable.display().to_string();
-    for arg in agent_args {
+    for arg in &command.args {
         if arg.chars().any(char::is_control) {
             return Err(BridgeError::validation(
                 "An agent argument contains an unsupported control character.",
@@ -161,59 +163,87 @@ fn build_launch_plan_with_args_for(
 
     let is_wt = kind == TerminalKind::WindowsTerminal;
 
-    let args: Vec<String> = if is_wt {
-        // `wt -d <dir> -- <exe>` opens a new tab in the project directory and
-        // runs the agent there. Each element is a separate argv entry.
-        let mut args = vec![
-            "-d".to_string(),
-            workdir_str.clone(),
-            "--".to_string(),
-            exe_str.clone(),
-        ];
-        args.extend(agent_args.iter().cloned());
-        args
-    } else {
-        // PowerShell fallback. `-NoExit` keeps the window open after the agent
-        // exits so the user can read output. The command is a single argv
-        // element (PowerShell's own -Command contract), built only from the
-        // resolved executable path and the *validated* project directory.
-        //
-        // The path is passed via the `-LiteralPath`/`Set-Location` cmdlet rather
-        // than string concatenation into a command pipeline, and the executable
-        // is invoked with the call operator on a single-quoted literal.
-        let quoted_args = agent_args
-            .iter()
-            .map(|arg| format!(" {}", ps_single_quote(arg)))
-            .collect::<String>();
-        let script = format!(
-            "Set-Location -LiteralPath {}; & {}{}",
-            ps_single_quote(&workdir_str),
-            ps_single_quote(&exe_str),
-            quoted_args
-        );
-        vec![
-            "-NoExit".to_string(),
-            "-NoLogo".to_string(),
-            "-Command".to_string(),
-            script,
-        ]
-    };
+    let args: Vec<String>;
+    let display;
 
-    let display = if is_wt {
-        let suffix = if agent_args.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", agent_args.join(" "))
-        };
-        format!("wt -d \"{workdir_str}\" -- \"{exe_str}\"{suffix}")
-    } else {
-        let suffix = if agent_args.is_empty() {
-            String::new()
-        } else {
-            format!(" {}", agent_args.join(" "))
-        };
-        format!("Set-Location -LiteralPath \"{workdir_str}\"; & \"{exe_str}\"{suffix}")
-    };
+    match (is_wt, command.command_text.is_some()) {
+        // A shim. cmd.exe needs a command line, but Windows Terminal's parser
+        // treats a `'` in that line as a quote and breaks a path containing one,
+        // and Windows PowerShell 5.1 mangles embedded quotes in native arguments.
+        // Both are avoided by transporting the shim command as an encoded
+        // PowerShell script: base64 contains no quotes, apostrophes, or spaces.
+        // On the Windows Terminal path the working directory is set inside the
+        // script too, so no user path reaches the terminal's own parser.
+        (true, true) => {
+            let encoded = command
+                .powershell_encoded_script(&workdir_str)
+                .ok_or_else(|| BridgeError::internal("The agent command could not be prepared."))?;
+            args = vec![
+                "--".to_string(),
+                powershell_host().display().to_string(),
+                "-NoExit".to_string(),
+                "-NoLogo".to_string(),
+                "-EncodedCommand".to_string(),
+                encoded,
+            ];
+            display = format!(
+                "Set-Location -LiteralPath \"{workdir_str}\"; {}",
+                command.display
+            );
+        }
+        (false, true) => {
+            let encoded = command
+                .powershell_encoded_script(&workdir_str)
+                .ok_or_else(|| BridgeError::internal("The agent command could not be prepared."))?;
+            args = vec![
+                "-NoExit".to_string(),
+                "-NoLogo".to_string(),
+                "-EncodedCommand".to_string(),
+                encoded,
+            ];
+            display = format!(
+                "Set-Location -LiteralPath \"{workdir_str}\"; {}",
+                command.display
+            );
+        }
+        (true, false) => {
+            let mut native = vec![
+                "-d".to_string(),
+                workdir_str.clone(),
+                "--".to_string(),
+                command.program.display().to_string(),
+            ];
+            native.extend(command.args.iter().cloned());
+            args = native;
+            display = format!(
+                "wt -d \"{workdir_str}\" -- \"{}\"{}",
+                command.program.display(),
+                argument_suffix(&command.args)
+            );
+        }
+        (false, false) => {
+            let mut script = format!(
+                "Set-Location -LiteralPath {}; & {}",
+                powershell_literal(&workdir_str),
+                powershell_literal(&command.program.display().to_string())
+            );
+            for arg in &command.args {
+                script.push(' ');
+                script.push_str(&powershell_literal(arg));
+            }
+            args = vec![
+                "-NoExit".to_string(),
+                "-NoLogo".to_string(),
+                "-Command".to_string(),
+                script,
+            ];
+            display = format!(
+                "Set-Location -LiteralPath \"{workdir_str}\"; & \"{}\"{}",
+                command.program.display(),
+                argument_suffix(&command.args)
+            );
+        }
+    }
 
     Ok(LaunchPlan {
         agent,
@@ -221,7 +251,41 @@ fn build_launch_plan_with_args_for(
         args,
         working_dir: workdir_str,
         display,
+        new_console: !is_wt,
     })
+}
+
+/// PowerShell used to transport a shim command on the Windows Terminal path.
+///
+/// Windows PowerShell is present on every supported Windows build and supports
+/// `-EncodedCommand`; when PowerShell is already the fallback host, that host is
+/// used instead.
+fn powershell_host() -> PathBuf {
+    if let Ok(system_root) = std::env::var("SystemRoot") {
+        let candidate = PathBuf::from(system_root)
+            .join("System32")
+            .join("WindowsPowerShell")
+            .join("v1.0")
+            .join("powershell.exe");
+        if candidate.is_file() {
+            return candidate;
+        }
+    }
+    PathBuf::from("powershell.exe")
+}
+
+/// Prepare a launcher path for execution, mapping a refused shim path onto a
+/// user-facing validation error.
+fn launcher_command(agent_executable: &Path, args: &[&str]) -> BridgeResult<AgentCommand> {
+    Launcher::from_path(agent_executable.to_path_buf()).prepare(args)
+}
+
+fn argument_suffix(args: &[String]) -> String {
+    if args.is_empty() {
+        String::new()
+    } else {
+        format!(" {}", args.join(" "))
+    }
 }
 
 /// Validate and canonicalise a project directory.
@@ -272,10 +336,10 @@ pub fn strip_verbatim_prefix(path: PathBuf) -> PathBuf {
 /// Quote a value for a PowerShell single-quoted literal.
 ///
 /// Inside single quotes PowerShell treats everything literally; the only escape
-/// needed is doubling a single quote. This is defense in depth: even though the
-/// plan passes argv directly, the fallback path embeds these in a `-Command`
-/// string.
-fn ps_single_quote(value: &str) -> String {
+/// needed is doubling a single quote. This is used both by the PowerShell
+/// fallback's script and by the shim builder, which carries a `cmd.exe` command
+/// line through that script as data.
+pub(crate) fn powershell_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
@@ -287,6 +351,8 @@ pub struct SpawnPlan {
     pub working_dir: String,
     /// Environment overlay applied to this process tree only.
     pub env: Vec<(String, String)>,
+    /// Start the host with its own console window (the PowerShell fallback).
+    pub new_console: bool,
 }
 
 /// Spawn the process described by `plan`.
@@ -311,8 +377,17 @@ pub fn spawn(plan: &SpawnPlan) -> BridgeResult<u32> {
     {
         use std::os::windows::process::CommandExt;
         const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_NEW_CONSOLE: u32 = 0x0000_0010;
         const DETACHED_PROCESS: u32 = 0x0000_0008;
-        command.creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS);
+        // A console host started detached has no window and nowhere to run the
+        // agent, so it gets its own console. Windows Terminal is a GUI process
+        // and is detached instead.
+        let flags = if plan.new_console {
+            CREATE_NEW_PROCESS_GROUP | CREATE_NEW_CONSOLE
+        } else {
+            CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS
+        };
+        command.creation_flags(flags);
     }
 
     let child = command.spawn().map_err(|err| {
@@ -341,6 +416,7 @@ pub fn spawn_launch(
         args: plan.args.clone(),
         working_dir: plan.working_dir.clone(),
         env: env.to_vec(),
+        new_console: plan.new_console,
     };
     spawn(&spawn_plan)
 }
@@ -436,8 +512,8 @@ mod tests {
 
     #[test]
     fn powershell_fallback_quotes_single_quotes() {
-        assert_eq!(ps_single_quote("plain"), "'plain'");
-        assert_eq!(ps_single_quote("it's"), "'it''s'");
+        assert_eq!(powershell_literal("plain"), "'plain'");
+        assert_eq!(powershell_literal("it's"), "'it''s'");
     }
 
     #[test]
@@ -532,7 +608,7 @@ mod tests {
         // The escaping rule that actually matters: a `'` inside the path must
         // become `''`. If it were emitted raw, the literal would end early and
         // everything after it would be parsed as PowerShell.
-        let quoted = ps_single_quote(r"C:\Users\o'brien\proj'ect");
+        let quoted = powershell_literal(r"C:\Users\o'brien\proj'ect");
         assert_eq!(quoted, r"'C:\Users\o''brien\proj''ect'");
         // The result must be a single well-formed literal.
         assert!(quoted.starts_with('\''));
@@ -653,5 +729,108 @@ mod tests {
             .unwrap();
         assert!(!plan.display.is_empty());
         assert!(plan.display.contains("codex.exe"));
+    }
+
+    #[test]
+    fn a_shim_plan_transports_the_command_as_an_encoded_powershell_script() {
+        let dir = project();
+        let shim = dir.path().join("codex O'Brien.cmd");
+        std::fs::write(&shim, b"@echo off\r\n").unwrap();
+        let command = Launcher::from_path(shim.clone())
+            .command(&["--profile", "work", "--model", "p/m"])
+            .unwrap();
+        let project_dir = dir.path().join("proj");
+        std::fs::create_dir_all(&project_dir).unwrap();
+        let canonical = strip_verbatim_prefix(project_dir.canonicalize().unwrap())
+            .display()
+            .to_string();
+
+        let wt = build_launch_plan_for_command(
+            AgentId::Omp,
+            &command,
+            &project_dir,
+            TerminalKind::WindowsTerminal,
+            Path::new("wt.exe"),
+        )
+        .unwrap();
+
+        // Windows Terminal receives no user text at all: the path, the working
+        // directory, and the arguments travel inside the encoded script. That is
+        // what keeps its parser from treating an apostrophe as a quote.
+        assert_eq!(wt.args[0], "--");
+        assert_eq!(wt.args[2], "-NoExit");
+        assert_eq!(wt.args[4], "-EncodedCommand");
+        assert_eq!(wt.working_dir, canonical);
+        assert_encoded_script(&wt.args[5], &canonical, &shim, &command);
+
+        let ps = build_launch_plan_for_command(
+            AgentId::Omp,
+            &command,
+            &project_dir,
+            TerminalKind::PowerShell,
+            Path::new("powershell.exe"),
+        )
+        .unwrap();
+
+        assert_eq!(ps.args[0], "-NoExit");
+        assert_eq!(ps.args[2], "-EncodedCommand");
+        assert_eq!(ps.working_dir, canonical);
+        assert_encoded_script(&ps.args[3], &canonical, &shim, &command);
+    }
+
+    /// Decode the script Eclink hands to PowerShell and assert its contract.
+    fn assert_encoded_script(encoded: &str, workdir: &str, shim: &Path, command: &AgentCommand) {
+        use base64::Engine as _;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded)
+            .expect("the command must be valid base64");
+        let units: Vec<u16> = bytes
+            .chunks_exact(2)
+            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+            .collect();
+        let script = String::from_utf16(&units).expect("the script must be UTF-16");
+
+        assert!(
+            script.contains(&format!(
+                "Set-Location -LiteralPath '{}'",
+                workdir.replace('\'', "''")
+            )),
+            "the working directory is not a literal: {script}"
+        );
+        assert!(
+            script.contains("$env:ECLINK_AGENT_CMD = "),
+            "the command is not carried as data: {script}"
+        );
+        let escaped_shim = shim.display().to_string().replace('\'', "''");
+        assert!(
+            script.contains(&format!("\"{escaped_shim}\"")),
+            "the shim path is missing from the encoded command: {script}"
+        );
+        assert!(
+            script.contains("'--profile'") || script.contains("\"--profile\""),
+            "the profile argument is missing: {script}"
+        );
+        assert!(
+            script.contains("/d /s /v:off /c '%ECLINK_AGENT_CMD%'"),
+            "cmd.exe is not invoked with the carried command: {script}"
+        );
+        let _ = command;
+    }
+
+    #[test]
+    fn a_native_plan_still_uses_separate_argv_entries() {
+        let dir = project();
+        let plan = build_launch_plan_for(
+            AgentId::Claude,
+            Path::new(r"C:\Program Files\claude.exe"),
+            dir.path(),
+            TerminalKind::WindowsTerminal,
+            Path::new("wt.exe"),
+        )
+        .unwrap();
+
+        assert_eq!(plan.args[0], "-d");
+        assert_eq!(plan.args[2], "--");
+        assert_eq!(plan.args[3], r"C:\Program Files\claude.exe");
     }
 }

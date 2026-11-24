@@ -1253,9 +1253,10 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn launch_argv(&self, project_dir: &Path) -> BridgeResult<LaunchPlan> {
         // The same resolver detection uses, so the file that is launched is the
-        // file detection reported, including a saved install location.
+        // file detection reported. `prepare` builds the shim command line once.
         let launcher = self.launcher_for_launch()?;
-        crate::process::build_launch_plan(AgentId::Claude, launcher.path(), project_dir)
+        let command = launcher.prepare(&[])?;
+        crate::process::build_launch_plan_command(AgentId::Claude, &command, project_dir)
     }
 
     fn launch_env(&self, _secret: Option<&str>) -> BridgeResult<Vec<(String, String)>> {
