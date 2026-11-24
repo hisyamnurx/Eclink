@@ -583,7 +583,7 @@ pub fn validate_absolute_path(raw: &str) -> Result<PathBuf, String> {
     Ok(crate::process::strip_verbatim_prefix(path))
 }
 
-fn has_launcher_extension(path: &Path) -> bool {
+pub fn has_launcher_extension(path: &Path) -> bool {
     path.extension()
         .and_then(|extension| extension.to_str())
         .map(|extension| {
@@ -592,6 +592,22 @@ fn has_launcher_extension(path: &Path) -> bool {
                 .any(|allowed| extension.eq_ignore_ascii_case(allowed))
         })
         .unwrap_or(false)
+}
+
+/// The first path Windows can start, in the order it was given.
+///
+/// `where.exe` lists every match on `PATH`, and an npm install on Windows puts
+/// the POSIX launcher (`...\npm\codex`, no extension, a shell script) before the
+/// batch file that actually runs (`...\npm\codex.cmd`). Windows cannot start the
+/// former at all, so taking the first line of `where` output picks a path whose
+/// every probe fails. This keeps the ordering that `where` reported - so the
+/// first installation with a usable launcher still wins - while skipping entries
+/// no Windows API can execute.
+pub fn first_runnable(paths: &[PathBuf]) -> Option<PathBuf> {
+    paths
+        .iter()
+        .find(|path| has_launcher_extension(path))
+        .cloned()
 }
 
 /// Apply a resolution to a detection result.

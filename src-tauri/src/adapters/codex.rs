@@ -72,8 +72,8 @@ impl CodexAdapter {
     /// resolve to exactly the same executable afterwards.
     fn automatic_launcher() -> Option<PathBuf> {
         let which = tauri::async_runtime::block_on(detect::which("codex"));
-        if let Some(found) = which.first() {
-            return Some(found.clone());
+        if let Some(found) = Self::choose_launcher(&which.paths) {
+            return Some(found);
         }
         let home = crate::paths::home_dir().ok()?;
         let candidates = detect::known_locations(
@@ -82,6 +82,25 @@ impl CodexAdapter {
             &[".codex\\bin", ".cargo\\bin"],
         );
         detect::first_existing(&candidates)
+    }
+
+    /// Pick the launcher to run from `where codex` output.
+    ///
+    /// An npm install on Windows registers three names in the same folder:
+    /// `codex` (a POSIX shell script with no extension), `codex.cmd`, and
+    /// `codex.ps1`. `where.exe` reports them in that order, and only the batch
+    /// file can be started by Windows, so taking the first line meant Eclink ran
+    /// a file every probe failed on - "Detected" with "Version unknown", and a
+    /// Launch that opened a terminal and immediately died.
+    ///
+    /// The first entry Windows can actually run wins, and the rest of the order
+    /// still comes from `where`, so the earliest *installation* that has a usable
+    /// launcher stays the one Eclink uses. If nothing in the list is runnable the
+    /// old behaviour is kept: the first entry is used rather than claiming Codex
+    /// is missing, because the file may still be a legitimate extensionless
+    /// executable.
+    fn choose_launcher(where_paths: &[PathBuf]) -> Option<PathBuf> {
+        locate::first_runnable(where_paths).or_else(|| where_paths.first().cloned())
     }
 
     /// Resolve the launcher this adapter would run, honouring a saved location.
@@ -859,6 +878,64 @@ mod tests {
         assert!(!is_managed_provider_id("openai"));
         assert!(!is_managed_provider_id("ollama"));
         assert!(!is_managed_provider_id("lmstudio"));
+    }
+
+    /// The exact `where codex` order an npm install produces, plus a second
+    /// installation further down `PATH`.
+    fn npm_where_output(root: &std::path::Path) -> Vec<PathBuf> {
+        let npm = root.join("npm");
+        let other = root.join("other");
+        vec![
+            npm.join("codex"),
+            npm.join("codex.cmd"),
+            other.join("codex.exe"),
+        ]
+    }
+
+    #[test]
+    fn where_output_skips_the_extensionless_npm_shim() {
+        // `where codex` lists the POSIX shell script first, the batch file second.
+        // Windows cannot start the script, so the batch file is the launcher - and
+        // it must be the one in the *same* install folder, not the .exe from the
+        // next installation on PATH.
+        let dir = tempfile::tempdir().unwrap();
+        let chosen = CodexAdapter::choose_launcher(&npm_where_output(dir.path())).unwrap();
+
+        assert_eq!(chosen, dir.path().join("npm").join("codex.cmd"));
+    }
+
+    #[test]
+    fn where_output_keeps_the_order_between_runnable_installations() {
+        // Both entries can run; the earlier installation still wins.
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first").join("codex.exe");
+        let second = dir.path().join("second").join("codex.cmd");
+
+        let chosen = CodexAdapter::choose_launcher(&[first.clone(), second]).unwrap();
+
+        assert_eq!(chosen, first);
+    }
+
+    #[test]
+    fn where_output_skips_a_powershell_script_too() {
+        // npm also drops `codex.ps1` beside the batch file; it is not startable.
+        let dir = tempfile::tempdir().unwrap();
+        let npm = dir.path().join("npm");
+        let chosen =
+            CodexAdapter::choose_launcher(&[npm.join("codex.ps1"), npm.join("codex.cmd")]).unwrap();
+
+        assert_eq!(chosen, npm.join("codex.cmd"));
+    }
+
+    #[test]
+    fn where_output_with_nothing_runnable_keeps_the_old_first_entry() {
+        // An extensionless file can still be a real executable, so it is used
+        // rather than reporting Codex as missing.
+        let dir = tempfile::tempdir().unwrap();
+        let only = dir.path().join("npm").join("codex");
+
+        assert_eq!(CodexAdapter::choose_launcher(&[only.clone()]), Some(only));
+        assert_eq!(CodexAdapter::choose_launcher(&[]), None);
     }
 
     #[test]
